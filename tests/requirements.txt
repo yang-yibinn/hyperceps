@@ -1,0 +1,2 @@
+# Hyperceps test script dependencies (tests/test_hyperceps.py). Python 3.10 or newer.
+mcp==2.3.0

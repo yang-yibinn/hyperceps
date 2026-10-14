@@ -1,0 +1,77 @@
+{
+  "type": "object",
+  "properties": {
+    "components": {
+      "type": "array",
+      "description": "Objects to create. Each: unique ref + one of type|param|panel|slider|valueList|toggle.",
+      "items": {
+        "type": "object",
+        "required": ["ref"],
+        "properties": {
+          "ref": {"type": "string", "description": "Local name for later entries and batches; letters, digits, _ -; lowercase by convention."},
+          "type": {"type": "string", "description": "Exact name, 'Category/Name', 'Category/Subcategory/Name' or GUID. Never loose."},
+          "param": {"type": "string", "description": "Params-tab object, e.g. 'Curve'."},
+          "panel": {"type": "string", "description": "Panel text. A list is one value per line (no Text Split)."},
+          "multiline": {"type": "boolean", "description": "Panel: false (default) one item per line; true whole text one item."},
+          "slider": {"type": "object", "description": "{min,max,value,decimals}"},
+          "valueList": {"type": "object", "description": "{items:[{name,value}], selected: index or name}"},
+          "toggle": {"type": "boolean"},
+          "nickname": {"type": "string", "description": "Only when wanted; unique. Capitals on key inputs/outputs."},
+          "x": {"type": "number"},
+          "y": {"type": "number", "description": "Omit x and y for auto-layout."},
+          "inputs": {"type": "integer", "description": "Variable-parameter port counts (Merge, Entwine...)."},
+          "outputs": {"type": "integer"},
+          "addOutputs": {"type": "integer", "description": "Extra outputs, e.g. 1 = List Item 'Item +1'."},
+          "inputModifiers": {"type": "object", "description": "{port: setting or [settings]}; graft|flatten|simplify|reverse, e.g. {\"i\":\"graft\"}."},
+          "outputModifiers": {"type": "object"}
+        }
+      }
+    },
+    "set": {
+      "type": "array",
+      "description": "Change new or existing objects. target: object, or 'obj.port' for an input value.",
+      "items": {
+        "type": "object",
+        "required": ["target"],
+        "properties": {
+          "target": {"type": "string"},
+          "value": {"description": "number|bool|string|{point:[x,y,z]}|{vector:[x,y,z]}|{domain:[a,b]}, a list, or null to clear. Slider/toggle/value list/panel: value, state, item, text."},
+          "panel": {"type": "string"},
+          "multiline": {"type": "boolean"},
+          "slider": {"type": "object"},
+          "valueList": {"type": "object"},
+          "nickname": {"type": "string"},
+          "inputs": {"type": "integer"},
+          "outputs": {"type": "integer"},
+          "inputModifiers": {"type": "object", "description": "Listed ports get exactly these settings; [] clears."},
+          "outputModifiers": {"type": "object"}
+        }
+      }
+    },
+    "insert": {
+      "type": "array",
+      "description": "{ref, on:[output,input], in, out}: put a new component into an existing wire. in/out default 0.",
+      "items": {"type": "object", "required": ["ref", "on"]}
+    },
+    "wires": {
+      "type": "array",
+      "description": "[output, input] pairs. End = 'obj.port' (last dot splits; port = index, name or nickname), 'obj' for single-port objects, or {obj, port}. obj = ref, unique nickname, GUID or 8+ char GUID prefix.",
+      "items": {"type": "array", "minItems": 2, "maxItems": 2}
+    },
+    "disconnect": {
+      "type": "array",
+      "description": "[output, input] pairs to remove; \"*\" on one side = all wires into that input / out of that output.",
+      "items": {"type": "array", "minItems": 2, "maxItems": 2}
+    },
+    "delete": {"type": "array", "items": {"type": "string"}},
+    "groups": {
+      "type": "array",
+      "description": "{name, color, members} creates; {extend: name|GUID, members, color} adds. color #RRGGBB or #AARRGGBB.",
+      "items": {"type": "object"}
+    },
+    "options": {
+      "type": "object",
+      "description": "atomic (true), dryRun (false), solve (true), returnRuntimeMessages (true), maxOperations (1000), timeoutSeconds (60)."
+    }
+  }
+}

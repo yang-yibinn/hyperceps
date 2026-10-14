@@ -1,0 +1,106 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- Cross-platform Rhino 8.21+ (macOS + Windows) - .NET 8 for MCP SDK -->
+    <TargetFramework>net8.0</TargetFramework>
+    <OutputType>Library</OutputType>
+    <EnableDynamicLoading>true</EnableDynamicLoading>
+    <TargetExt>.gha</TargetExt>
+    <NoWarn>NU1701;NETSDK1086</NoWarn>
+
+    <!-- Hyperceps: a distinct assembly name so it loads alongside the original Cordyceps.
+         RootNamespace stays "Cordyceps" so namespaces and embedded resource names are unchanged. -->
+    <AssemblyName>Hyperceps</AssemblyName>
+    <RootNamespace>Cordyceps</RootNamespace>
+
+    <!-- Only allow Release builds -->
+    <Configurations>Release</Configurations>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="Cordyceps.Tests" />
+    <!-- Hyperceps assembly GUID (the original Cordyceps declares none). -->
+    <AssemblyAttribute Include="System.Runtime.InteropServices.GuidAttribute">
+      <_Parameter1>07224ee3-bdde-4e91-90c2-e9a8a465c267</_Parameter1>
+    </AssemblyAttribute>
+  </ItemGroup>
+
+  <!-- Block Debug builds with a clear error message -->
+  <Target Name="BlockDebugBuilds" BeforeTargets="Build" Condition=" '$(Configuration)' != 'Release' ">
+    <Error Text="Only Release builds are supported. Use 'dotnet build -c Release'." />
+  </Target>
+
+  <PropertyGroup>
+    <!-- Release optimization settings -->
+    <Optimize>true</Optimize>
+    <DebugType>none</DebugType>
+    <DebugSymbols>false</DebugSymbols>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <!-- Specifies information for Assembly -->
+    <!-- Hyperceps versions independently (based on Cordyceps 1.5.0, commit bfef0e1). The skill in
+         skills/hyperceps carries the same number (Core/SkillPairing; a unit test checks it). -->
+    <Version>1.0.0</Version>
+    <Title>Hyperceps</Title>
+    <Company>Yibin Yang</Company>
+    <Authors>Yibin Yang; based on Cordyceps by Brooks Talley</Authors>
+    <Description>Lets Claude build and edit Grasshopper definitions in a few validated calls: batch edits, a compact canvas outline, data-tree checks and slider sweeps. Use it with the Hyperceps skill for Claude. Based on Cordyceps by Brooks Talley</Description>
+    <!-- Embed build timestamp into assembly -->
+    <SourceRevisionId>build$([System.DateTime]::UtcNow.ToString("yyyyMMddHHmmss"))</SourceRevisionId>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Grasshopper (Rhino 8) -->
+    <PackageReference Include="Grasshopper" Version="8.0.23304.9001" ExcludeAssets="runtime" />
+
+    <!-- JSON serialization -->
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+  </ItemGroup>
+
+  <!-- Reference WinForms for cross-platform .NET 7.0 -->
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NETFramework.ReferenceAssemblies.net48" Version="1.0.3" ExcludeAssets="all" GeneratePathProperty="true" />
+    <Reference Include="$(PkgMicrosoft_NETFramework_ReferenceAssemblies_net48)\build\.NETFramework\v4.8\System.Windows.Forms.dll" Private="False" />
+    <PackageReference Include="System.Drawing.Common" Version="8.0.0" ExcludeAssets="runtime" />
+  </ItemGroup>
+
+  <!-- Component icon -->
+  <ItemGroup>
+    <EmbeddedResource Include="Resources\HypercepsIcon.png" />
+  </ItemGroup>
+
+  <!-- Embedded documentation resources -->
+  <ItemGroup>
+    <EmbeddedResource Include="Knowledge\GettingStartedGuide.md" />
+    <EmbeddedResource Include="Knowledge\DataTreesGuide.md" />
+    <EmbeddedResource Include="Knowledge\TypeSystemGuide.md" />
+    <EmbeddedResource Include="Knowledge\BestPracticesGuide.md" />
+    <EmbeddedResource Include="Knowledge\ComponentPatternsGuide.md" />
+    <EmbeddedResource Include="Knowledge\CanvasLayoutGuide.md" />
+    <EmbeddedResource Include="Knowledge\GeometryOrientationGuide.md" />
+    <EmbeddedResource Include="Knowledge\McpTestingGuide.md" />
+    <EmbeddedResource Include="Knowledge\RenderingGuide.md" />
+    <EmbeddedResource Include="Knowledge\CommonErrorsGuide.md" />
+    <EmbeddedResource Include="Knowledge\Patterns\LinearArray.md" />
+    <EmbeddedResource Include="Knowledge\Patterns\GridArray.md" />
+    <EmbeddedResource Include="Knowledge\Prompts\CreateParametricGeometry.md" />
+    <EmbeddedResource Include="Knowledge\Prompts\DebugDataMismatch.md" />
+    <EmbeddedResource Include="Knowledge\Prompts\SetupScriptComponent.md" />
+    <EmbeddedResource Include="Knowledge\Prompts\OptimizeCanvas.md" />
+    <EmbeddedResource Include="Knowledge\Prompts\PlanDefinition.md" />
+    <!-- Hyperceps: gh_batch's published input schema -->
+    <EmbeddedResource Include="Tools\Batch\GhBatchSchema.json" />
+  </ItemGroup>
+
+  <!-- Post-build: Copy .gha to releases folder for Grasshopper to load -->
+  <Target Name="CopyToReleases" AfterTargets="Build">
+    <PropertyGroup>
+      <ReleasesFolder>$(MSBuildProjectDirectory)\..\..\releases</ReleasesFolder>
+    </PropertyGroup>
+    <MakeDir Directories="$(ReleasesFolder)" Condition="!Exists('$(ReleasesFolder)')" />
+    <Copy SourceFiles="$(TargetPath)" DestinationFolder="$(ReleasesFolder)" />
+    <Message Importance="High" Text="Copied $(TargetFileName) to $(ReleasesFolder)" />
+  </Target>
+
+</Project>

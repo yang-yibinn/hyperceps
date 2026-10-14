@@ -1,0 +1,67 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0</TargetFramework>
+    <IsPackable>false</IsPackable>
+    <!-- Run the net8.0 test host on a newer runtime when no .NET 8 runtime is installed.
+         Only affects test execution; the shipping plugin (Cordyceps.csproj) stays net8.0. -->
+    <RollForward>Major</RollForward>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.8.0" />
+    <PackageReference Include="xunit" Version="2.6.6" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="2.5.6" />
+    <!-- Matches Cordyceps.csproj; required by linked Core files that use Newtonsoft.Json
+         (McpResultFormatter.cs, UnifiedToolHelpers.cs). -->
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+    <!-- JUnit XML output for the dotnet-test junit logger, consumed by
+         `prawduct-hook test-evidence record` (the gate's evidence writer). -->
+    <PackageReference Include="JunitXml.TestLogger" Version="8.0.0" />
+  </ItemGroup>
+
+  <!-- Link source files directly to avoid pulling in Grasshopper runtime dependencies -->
+  <ItemGroup>
+    <Compile Include="..\Cordyceps\Core\JsonTypeConverter.cs" Link="JsonTypeConverter.cs" />
+    <Compile Include="..\Cordyceps\Core\DocumentLock.cs" Link="DocumentLock.cs" />
+    <Compile Include="..\Cordyceps\Core\InFlightRequests.cs" Link="InFlightRequests.cs" />
+    <Compile Include="..\Cordyceps\Core\CommandStats.cs" Link="CommandStats.cs" />
+    <Compile Include="..\Cordyceps\Core\ScriptDirective.cs" Link="ScriptDirective.cs" />
+    <Compile Include="..\Cordyceps\Core\ScriptParamDefs.cs" Link="ScriptParamDefs.cs" />
+    <Compile Include="..\Cordyceps\Core\ScriptSourceWriter.cs" Link="ScriptSourceWriter.cs" />
+    <Compile Include="..\Cordyceps\Core\ScriptProgram.cs" Link="ScriptProgram.cs" />
+    <Compile Include="..\Cordyceps\Core\BuildVersion.cs" Link="BuildVersion.cs" />
+    <Compile Include="..\Cordyceps\Core\GhArchiveSave.cs" Link="GhArchiveSave.cs" />
+    <Compile Include="..\Cordyceps\Core\SliderConfig.cs" Link="SliderConfig.cs" />
+    <Compile Include="..\Cordyceps\Core\DataModifiers.cs" Link="DataModifiers.cs" />
+    <Compile Include="..\Cordyceps\Core\ParamSyncPlan.cs" Link="ParamSyncPlan.cs" />
+    <Compile Include="..\Cordyceps\Core\ParamSpecLookup.cs" Link="ParamSpecLookup.cs" />
+    <Compile Include="..\Cordyceps\Core\McpResultFormatter.cs" Link="McpResultFormatter.cs" />
+    <Compile Include="..\Cordyceps\Core\RequestValidator.cs" Link="RequestValidator.cs" />
+    <Compile Include="..\Cordyceps\Core\UnifiedToolHelpers.cs" Link="UnifiedToolHelpers.cs" />
+    <Compile Include="..\Cordyceps\Core\PlaceImageValidation.cs" Link="PlaceImageValidation.cs" />
+    <Compile Include="..\Cordyceps\Core\ParseHelpers.cs" Link="ParseHelpers.cs" />
+    <Compile Include="..\Cordyceps\Core\ResponseHelpers.cs" Link="ResponseHelpers.cs" />
+    <Compile Include="..\Cordyceps\Core\McpNaming.cs" Link="McpNaming.cs" />
+    <Compile Include="..\Cordyceps\Core\PromptTemplate.cs" Link="PromptTemplate.cs" />
+    <Compile Include="..\Cordyceps\Core\LogBuffer.cs" Link="LogBuffer.cs" />
+    <Compile Include="..\Cordyceps\Core\JsonRpcEnvelope.cs" Link="JsonRpcEnvelope.cs" />
+    <Compile Include="..\Cordyceps\Core\ServerState.cs" Link="ServerState.cs" />
+    <Compile Include="..\Cordyceps\Core\SnapshotStore.cs" Link="SnapshotStore.cs" />
+    <Compile Include="..\Cordyceps\Core\SolverState.cs" Link="SolverState.cs" />
+    <Compile Include="..\Cordyceps\Core\StatusEnvelope.cs" Link="StatusEnvelope.cs" />
+  </ItemGroup>
+
+  <!-- Hyperceps: the host-free parts of gh_batch, and the schema it publishes -->
+  <ItemGroup>
+    <Compile Include="..\Cordyceps\Core\Batch\*.cs" LinkBase="Batch" />
+    <Compile Include="..\Cordyceps\Core\McpInputSchemaAttribute.cs" Link="McpInputSchemaAttribute.cs" />
+    <Compile Include="..\Cordyceps\Core\TreeSummary.cs" Link="TreeSummary.cs" />
+    <Compile Include="..\Cordyceps\Core\Outline\*.cs" LinkBase="Outline" />
+    <Compile Include="..\Cordyceps\Core\Sweep\*.cs" LinkBase="Sweep" />
+    <Compile Include="..\Cordyceps\Core\SkillPairing.cs" Link="SkillPairing.cs" />
+    <Compile Include="..\Cordyceps\Core\SingleStepNudge.cs" Link="SingleStepNudge.cs" />
+    <EmbeddedResource Include="..\Cordyceps\Tools\Batch\GhBatchSchema.json" LogicalName="GhBatchSchema.json" />
+  </ItemGroup>
+
+</Project>

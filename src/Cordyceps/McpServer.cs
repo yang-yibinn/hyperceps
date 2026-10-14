@@ -1,0 +1,1053 @@
+using System;
+using System.Collections.Generic;
+using System.ComponentModel;
+using System.IO;
+using System.Linq;
+using System.Net;
+using System.Reflection;
+using System.Text;
+using System.Text.Json;
+using System.Text.Json.Serialization;
+using System.Threading;
+using System.Threading.Tasks;
+using Cordyceps.Core;
+using Cordyceps.Prompts;
+using Cordyceps.Resources;
+using Rhino;
+
+namespace Cordyceps
+{
+    /// <summary>
+    /// MCP Server using HttpListener with Streamable HTTP transport.
+    /// Implements the MCP 2025-06-18 specification with stateless mode.
+    /// Discovers tools via reflection on [McpServerTool] attributes.
+    /// </summary>
+    public class McpServer : IDisposable
+    {
+        // Configuration constants
+        private const int DEFAULT_PORT = 26930; // Hyperceps (the original Cordyceps uses 26929)
+        private const int SHUTDOWN_TIMEOUT_SECONDS = 2;
+        private const int LOG_TRUNCATE_LENGTH = 200;
+
+        private HttpListener _listener;
+        private CancellationTokenSource _cts;
+        private Task _listenerTask;
+        private int _port;
+        // volatile: written on the UI thread (Start) and nulled by Stop()'s background teardown
+        // task, read once (captured into a local, null-guarded) on HTTP worker threads.
+        private volatile GrasshopperContext _context;
+        private readonly List<ToolInfo> _tools = new List<ToolInfo>();
+        // In-flight request handlers, tracked so Stop() can drain them before tearing down
+        // shared state instead of detaching them mid-request.
+        private readonly Core.InFlightRequests _inFlight = new Core.InFlightRequests();
+        private bool _disposed;
+        private DateTime _startTime;
+
+        /// <summary>
+        /// Cached so publish and withdraw hand the status registry the SAME delegate instance —
+        /// the registry compares by reference, and converting a method group creates a fresh
+        /// delegate every time, which would leave a stopped server's provider registered forever.
+        /// </summary>
+        private readonly Func<Core.StatusInputs> _statusProvider;
+
+        public McpServer()
+        {
+            _statusProvider = CurrentStatusInputs;
+        }
+
+        /// <summary>
+        /// Lifecycle single source of truth (MCP-9F3Q). All lifecycle reads and writes go
+        /// through this field; <see cref="IsRunning"/> is derived from it. Written on the UI
+        /// thread (Start, and Stop's synchronous half) and by Stop()'s background teardown task
+        /// (the final Stopped transition); read from worker threads — hence volatile.
+        /// </summary>
+        private volatile Core.ServerState _state = Core.ServerState.Stopped;
+
+        /// <summary>
+        /// Current lifecycle state of the server.
+        /// </summary>
+        public Core.ServerState State => _state;
+
+        /// <summary>
+        /// Whether the server is currently running (derived from <see cref="State"/>)
+        /// </summary>
+        public bool IsRunning => _state == Core.ServerState.Running;
+
+        /// <summary>
+        /// Actionable reason the last <see cref="Start"/> failed (e.g. the port is held by another
+        /// application), or <c>null</c> if the server started cleanly. Lets the host component
+        /// surface a real cause instead of a bare "NOT RUNNING".
+        /// </summary>
+        public string StartError { get; private set; }
+
+        /// <summary>
+        /// Thread-safe activity counters. <see cref="RecordCommand"/> runs on concurrent HTTP
+        /// worker threads while the status/health readers run elsewhere, so the counter and
+        /// last-command label go through <see cref="Core.CommandStats"/> rather than unsynchronized
+        /// fields (which lost increments and risked stale reads).
+        /// </summary>
+        private readonly Core.CommandStats _commandStats = new Core.CommandStats();
+
+        /// <summary>Hyperceps: suggests gh_batch after repeated single-step edits.</summary>
+        private readonly Core.SingleStepNudge _nudge = new Core.SingleStepNudge();
+
+        /// <summary>
+        /// Total number of commands received
+        /// </summary>
+        public int CommandCount => _commandStats.Count;
+
+        /// <summary>
+        /// Last command received (type and timestamp)
+        /// </summary>
+        public string LastCommand => _commandStats.Last;
+
+        /// <summary>
+        /// Current port the server is listening on
+        /// </summary>
+        public int Port => _port;
+
+        /// <summary>
+        /// Start the MCP server on the specified port
+        /// </summary>
+        public void Start(int port = DEFAULT_PORT)
+        {
+            if (!Core.ServerStateTransitions.CanStart(_state))
+            {
+                Core.DebugLog.WriteLine($"MCP server Start() ignored: state is {_state}", "INFO", 1);
+                return;
+            }
+
+            _state = Core.ServerState.Starting;
+            _port = port;
+            _cts = new CancellationTokenSource();
+            StartError = null;
+
+            try
+            {
+                // Create context for tool execution
+                _context = new GrasshopperContext();
+
+                // Discover tools from assembly
+                DiscoverTools();
+                Core.DebugLog.WriteLine($"Discovered {_tools.Count} tools", "INFO", 1);
+
+                // Create and start HttpListener (bind to both IPv4 and IPv6)
+                _listener = new HttpListener();
+                _listener.Prefixes.Add($"http://localhost:{port}/");
+                _listener.Prefixes.Add($"http://127.0.0.1:{port}/");
+                _listener.Start();
+
+                // Start listening in background
+                _listenerTask = Task.Run(() => ListenLoopAsync(_cts.Token), _cts.Token);
+
+                _state = Core.ServerState.Running;
+                _startTime = DateTime.UtcNow;
+
+                // Publish our counters so tool classes, which hold no server reference, can report
+                // the Cordyceps layer of the status block without a back-reference into this type.
+                Core.SolverState.Shared.PublishServerSnapshot(_statusProvider);
+
+                Core.DebugLog.WriteLine($"MCP server started on http://127.0.0.1:{_port}/mcp", "INFO", 0);
+            }
+            catch (Exception ex) // prawduct:allow prawduct/broad-except -- startup boundary: any failure (bind/reflection) must leave the server cleanly not-running with an actionable reason, never crash the host component's solve
+            {
+                // Surface an actionable reason so the host component can show *why* the server is
+                // not running rather than a bare "NOT RUNNING". A bind failure (port held by a
+                // non-Cordyceps process) arrives as HttpListenerException.
+                StartError = ex is HttpListenerException
+                    ? $"MCP server could not start on port {port}: {ex.Message}. The port may be in use by another application — choose a different port (the HttpPort input) or close the process holding it."
+                    : $"MCP server failed to start on port {port}: {ex.Message}";
+
+                Core.DebugLog.WriteLine($"Failed to start MCP server: {ex.Message}", "ERROR", 0);
+                Core.DebugLog.WriteLine($"Stack trace: {ex.StackTrace}", "ERROR", 1);
+                _cts?.Dispose();
+                _cts = null;
+                _listener?.Close();
+                _listener = null;
+                _context = null; // Failed carries the same no-live-plumbing invariant as Stopped
+                _state = Core.ServerState.Failed;
+            }
+        }
+
+        /// <summary>
+        /// Stop the MCP server. The synchronous half (listener cancel/close) frees the port
+        /// before returning so a replacement server can bind immediately; the in-flight-handler
+        /// drain and final teardown run on a background task (see MCP-3D8V below). After this
+        /// returns the state is <see cref="Core.ServerState.Stopping"/> until the drain
+        /// completes, then <see cref="Core.ServerState.Stopped"/>.
+        /// </summary>
+        public void Stop()
+        {
+            if (!Core.ServerStateTransitions.CanStop(_state)) return;
+
+            _state = Core.ServerState.Stopping;
+            Core.DebugLog.WriteLine($"Stopping MCP server (port {_port})...", "INFO", 1);
+
+            try
+            {
+                _cts?.Cancel();
+                _listener?.Stop();
+                _listener?.Close();
+            }
+            catch (Exception ex) // prawduct:allow prawduct/broad-except -- teardown boundary: a listener stop/close failure must never throw into the host component's solve; log and continue so the background teardown still releases state
+            {
+                Core.DebugLog.WriteLine($"Error stopping server: {ex.Message}", "ERROR", 0);
+            }
+
+            // Hand the disposable pieces to the background task and clear the fields now, so a
+            // half-torn-down server never presents live-looking plumbing.
+            var cts = _cts;
+            var listenerTask = _listenerTask;
+            _cts = null;
+            _listener = null;
+            _listenerTask = null;
+
+            // Drain OFF the calling thread (MCP-3D8V). Stop() is invoked on the UI thread (the
+            // component's port-change, RemovedFromDocument, and DocumentContextChanged paths),
+            // while an in-flight handler is typically a worker blocked in RhinoApp.InvokeAndWait
+            // waiting for that same UI thread — so a synchronous drain here could never succeed
+            // for exactly the handlers it protects and stalled the UI for the full budget.
+            // Returning first lets the blocked handler's UI work run, so the drain genuinely
+            // observes handlers finishing against a still-valid context; only then is the
+            // context released. A handler that outlives the budget is detached; it reads the
+            // context defensively (see HandleToolCallAsync) and the document-lock timeout
+            // bounds any wedged work, so the background wait stays finite.
+            Task.Run(() =>
+            {
+                try
+                {
+                    try { listenerTask?.Wait(TimeSpan.FromSeconds(SHUTDOWN_TIMEOUT_SECONDS)); }
+                    catch (AggregateException ex)
+                    {
+                        Core.DebugLog.WriteLine($"Shutdown exception (expected): {ex.InnerException?.Message}", "DEBUG", 1);
+                    }
+
+                    if (_inFlight.DrainWithin(TimeSpan.FromSeconds(SHUTDOWN_TIMEOUT_SECONDS)))
+                        Core.DebugLog.WriteLine($"Shutdown (port {_port}): all in-flight requests drained", "DEBUG", 1);
+                    else
+                        Core.DebugLog.WriteLine($"Shutdown (port {_port}): {_inFlight.Count} request(s) still in flight after {SHUTDOWN_TIMEOUT_SECONDS}s; detaching", "WARN", 1);
+                }
+                catch (Exception ex) // prawduct:allow prawduct/broad-except -- background teardown: an unexpected failure here would otherwise vanish as an unobserved task exception; log it, then let finally release state regardless
+                {
+                    Core.DebugLog.WriteLine($"Shutdown (port {_port}): background teardown error: {ex.Message}", "ERROR", 0);
+                }
+                finally
+                {
+                    // State transition BEFORE disposal: if Dispose ever threw, the instance
+                    // must not be left stuck in Stopping with the context still pinned.
+                    _context = null;
+                    // Only withdraws if we are still the published provider, so a replacement
+                    // server that started meanwhile keeps reporting.
+                    Core.SolverState.Shared.ClearServerSnapshot(_statusProvider);
+                    _state = Core.ServerState.Stopped;
+                    Core.DebugLog.WriteLine($"MCP server (port {_port}) stopped", "INFO", 0);
+                    cts?.Dispose();
+                }
+            });
+        }
+
+        /// <summary>
+        /// Discover tools via reflection on [McpServerTool] attributes
+        /// </summary>
+        private void DiscoverTools()
+        {
+            _tools.Clear();
+            var assembly = Assembly.GetExecutingAssembly();
+
+            foreach (var type in assembly.GetTypes())
+            {
+                // Look for types with [McpServerToolType] attribute
+                var toolTypeAttr = type.GetCustomAttribute<McpServerToolTypeAttribute>();
+                if (toolTypeAttr == null) continue;
+
+                foreach (var method in type.GetMethods(BindingFlags.Public | BindingFlags.Instance))
+                {
+                    var toolAttr = method.GetCustomAttribute<McpServerToolAttribute>();
+                    if (toolAttr == null) continue;
+
+                    var descAttr = method.GetCustomAttribute<DescriptionAttribute>();
+                    var toolName = ConvertToSnakeCase(method.Name);
+
+                    var parameters = new List<ToolParameter>();
+                    foreach (var param in method.GetParameters())
+                    {
+                        var paramDesc = param.GetCustomAttribute<DescriptionAttribute>();
+                        parameters.Add(new ToolParameter
+                        {
+                            Name = param.Name,
+                            Description = paramDesc?.Description ?? "",
+                            Type = GetJsonType(param.ParameterType),
+                            IsRequired = !param.HasDefaultValue
+                        });
+                    }
+
+                    // Hyperceps: a tool with nested JSON arguments publishes its own schema.
+                    var schemaAttr = method.GetCustomAttribute<Core.McpInputSchemaAttribute>();
+
+                    _tools.Add(new ToolInfo
+                    {
+                        Name = toolName,
+                        Description = descAttr?.Description ?? "",
+                        DeclaringType = type,
+                        Method = method,
+                        Parameters = parameters,
+                        InputSchema = schemaAttr == null ? (JsonElement?)null : Core.McpInputSchema.Load(assembly, schemaAttr.ResourceName)
+                    });
+                }
+            }
+        }
+
+        // The PascalCase -> snake_case tool-name mapping lives in Core.McpNaming (host-free,
+        // unit-tested there — the real tool names are pinned as a contract in Cordyceps.Tests).
+        private static string ConvertToSnakeCase(string name) => Core.McpNaming.ToSnakeCase(name);
+
+        private static string GetJsonType(Type type) => Core.JsonTypeConverter.GetJsonType(type);
+
+        /// <summary>
+        /// Main HTTP listener loop
+        /// </summary>
+        private async Task ListenLoopAsync(CancellationToken ct)
+        {
+            while (!ct.IsCancellationRequested && _listener?.IsListening == true)
+            {
+                try
+                {
+                    var httpContext = await _listener.GetContextAsync().ConfigureAwait(false);
+                    // Track the handler so Stop() can drain it instead of detaching it.
+                    var handlerTask = Task.Run(() => HandleRequestAsync(httpContext, ct), ct);
+                    _inFlight.Track(handlerTask);
+                }
+                catch (HttpListenerException) when (ct.IsCancellationRequested) { break; }
+                catch (ObjectDisposedException) { break; }
+                catch (Exception ex)
+                {
+                    if (!ct.IsCancellationRequested)
+                        Core.DebugLog.WriteLine($"Listener error: {ex.Message}", "ERROR", 0);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Handle an incoming HTTP request (Streamable HTTP transport)
+        /// </summary>
+        private async Task HandleRequestAsync(HttpListenerContext context, CancellationToken ct)
+        {
+            var request = context.Request;
+            var response = context.Response;
+
+            try
+            {
+                var path = request.Url?.AbsolutePath ?? "/";
+                Core.DebugLog.WriteLine($"{request.HttpMethod} {path} from {request.RemoteEndPoint}", "INFO", 1);
+
+                // Security: Validate Origin header (DNS rebinding protection)
+                var validatedOrigin = ValidateOrigin(request, response, out bool isValid);
+                if (!isValid)
+                    return;
+
+                // CORS preflight
+                if (request.HttpMethod == "OPTIONS")
+                {
+                    HandleCorsPreFlight(response, validatedOrigin);
+                    return;
+                }
+
+                // Streamable HTTP endpoint (MCP 2025-06-18)
+                if (path == "/mcp")
+                {
+                    if (request.HttpMethod == "POST")
+                    {
+                        await HandleMcpPostAsync(context, validatedOrigin);
+                    }
+                    else
+                    {
+                        // GET and DELETE return 405 in stateless mode
+                        response.StatusCode = 405;
+                        response.Close();
+                    }
+                    return;
+                }
+
+                // Health check endpoint (keep for debugging)
+                if (path == "/" || path == "/health")
+                {
+                    await HandleHealthCheckAsync(response);
+                    return;
+                }
+
+                response.StatusCode = 404;
+                response.Close();
+            }
+            catch (Exception ex)
+            {
+                Core.DebugLog.WriteLine($"Request error: {ex.Message}", "ERROR", 0);
+                try
+                {
+                    response.StatusCode = 500;
+                    response.Close();
+                }
+                catch (Exception closeEx)
+                {
+                    Core.DebugLog.WriteLine($"Failed to close error response: {closeEx.Message}", "WARN", 1);
+                }
+            }
+        }
+
+        /// <summary>
+        /// Validate Origin header to prevent DNS rebinding attacks.
+        /// Returns the validated origin (or null if no origin header present).
+        /// </summary>
+        private string ValidateOrigin(HttpListenerRequest request, HttpListenerResponse response, out bool isValid)
+        {
+            isValid = true;
+            var origin = request.Headers["Origin"];
+            if (!string.IsNullOrEmpty(origin))
+            {
+                try
+                {
+                    var originUri = new Uri(origin);
+                    if (originUri.Host != "127.0.0.1" && originUri.Host != "localhost")
+                    {
+                        Core.DebugLog.WriteLine($"Rejected request from non-localhost origin: {origin}", "WARN", 1);
+                        response.StatusCode = 403;
+                        response.Close();
+                        isValid = false;
+                        return null;
+                    }
+                    return origin; // Return the validated origin for CORS header
+                }
+                catch (UriFormatException)
+                {
+                    Core.DebugLog.WriteLine($"Rejected request with malformed origin: {origin}", "WARN", 1);
+                    response.StatusCode = 403;
+                    response.Close();
+                    isValid = false;
+                    return null;
+                }
+            }
+            return null; // No origin header present
+        }
+
+        /// <summary>
+        /// Handle CORS preflight requests
+        /// </summary>
+        private void HandleCorsPreFlight(HttpListenerResponse response, string origin)
+        {
+            // Echo back the validated origin, or use wildcard if no origin header
+            response.Headers.Add("Access-Control-Allow-Origin", origin ?? "*");
+            response.Headers.Add("Access-Control-Allow-Methods", "POST, OPTIONS");
+            response.Headers.Add("Access-Control-Allow-Headers", "Content-Type, Accept");
+            response.Headers.Add("Access-Control-Max-Age", "86400");
+            response.StatusCode = 204;
+            response.Close();
+        }
+
+        /// <summary>
+        /// Handle health check requests.
+        ///
+        /// <para>Answers entirely from cached state. It previously read
+        /// <c>Instances.ActiveCanvas?.Document</c> directly on this HTTP worker thread — a
+        /// Grasshopper read off the UI thread, and one that returns nothing useful precisely when
+        /// the host is wedged. The document identity now comes from the UI-thread heartbeat, which
+        /// is both thread-correct and the only way this endpoint can keep answering while the UI
+        /// thread is blocked.</para>
+        /// </summary>
+        private async Task HandleHealthCheckAsync(HttpListenerResponse response)
+        {
+            response.StatusCode = 200;
+            response.ContentType = "application/json";
+
+            var status = Core.SolverState.Shared.Derive(CurrentStatusInputs());
+
+            var health = new Newtonsoft.Json.Linq.JObject
+            {
+                // "ok" means the HTTP endpoint answered. Whether the HOST is healthy is the
+                // three-layer block below — conflating the two is what made a wedged Rhino
+                // indistinguishable from a healthy one.
+                ["status"] = "ok",
+                ["server"] = "Hyperceps MCP",
+                ["transport"] = "streamable-http",
+                ["toolCount"] = _tools.Count,
+                ["commandCount"] = status.CommandCount,
+                ["uptimeSeconds"] = status.UptimeSeconds,
+                ["activeDocument"] = status.DocumentName,
+                ["host"] = Core.StatusEnvelope.ToFullJson(status),
+            };
+
+            var bytes = Encoding.UTF8.GetBytes(health.ToString(Newtonsoft.Json.Formatting.None));
+            await response.OutputStream.WriteAsync(bytes, 0, bytes.Length);
+            response.Close();
+        }
+
+        /// <summary>
+        /// Handle POST /mcp requests (Streamable HTTP transport)
+        /// </summary>
+        private async Task HandleMcpPostAsync(HttpListenerContext context, string origin)
+        {
+            var request = context.Request;
+            var response = context.Response;
+
+            try
+            {
+                // Validate Accept header - require application/json (SSE optional since we're
+                // stateless). Wildcards ("*/*", "application/*") accept JSON too.
+                var accept = request.Headers["Accept"] ?? "";
+                if (!accept.Contains("application/json") && !accept.Contains("*/*") && !accept.Contains("application/*"))
+                {
+                    Core.DebugLog.WriteLine($"Invalid Accept header (must include application/json): {accept}", "WARN", 1);
+                    response.StatusCode = 406; // Not Acceptable
+                    response.Close();
+                    return;
+                }
+
+                // Add CORS header for actual requests (echo validated origin)
+                response.Headers.Add("Access-Control-Allow-Origin", origin ?? "*");
+
+                // Check request body size limit (10MB) to prevent memory exhaustion.
+                // ContentLength64 < 0 means no Content-Length header (e.g. chunked transfer),
+                // which would bypass the cap entirely — require a declared length (411).
+                const long MAX_BODY_SIZE = 10 * 1024 * 1024;
+                if (request.ContentLength64 < 0)
+                {
+                    Core.DebugLog.WriteLine("Request without Content-Length (chunked?) rejected: body size cap cannot be enforced", "WARN", 1);
+                    response.StatusCode = 411; // Length Required
+                    response.Close();
+                    return;
+                }
+                if (request.ContentLength64 > MAX_BODY_SIZE)
+                {
+                    Core.DebugLog.WriteLine($"Request body too large: {request.ContentLength64} bytes (max {MAX_BODY_SIZE})", "WARN", 1);
+                    response.StatusCode = 413; // Payload Too Large
+                    response.Close();
+                    return;
+                }
+
+                using var reader = new StreamReader(request.InputStream, Encoding.UTF8);
+                var json = await reader.ReadToEndAsync();
+
+                Core.DebugLog.WriteLine($"Received: {json.Substring(0, Math.Min(LOG_TRUNCATE_LENGTH, json.Length))}...", "INFO", 1);
+
+                using var doc = JsonDocument.Parse(json);
+                var root = doc.RootElement;
+
+                var method = root.TryGetProperty("method", out var m) ? m.GetString() : null;
+                var paramsEl = root.TryGetProperty("params", out var p) ? p : default;
+
+                // Notification detection and lossless id echo live in Core.JsonRpcEnvelope
+                // (host-free, unit-tested): notifications are ABSENT-id only ("id": null still
+                // gets a response), and the id is computed BEFORE dispatch so a malformed id can
+                // never destroy the response after the tool's side effects ran.
+                bool isNotification = Core.JsonRpcEnvelope.IsNotification(root);
+                JsonElement? responseId = Core.JsonRpcEnvelope.EchoId(root);
+
+                object result = null;
+                string errorMessage = null;
+                int errorCode = 0;
+
+                try
+                {
+                    result = await DispatchMethodAsync(method, paramsEl);
+                }
+                catch (Exception ex)
+                {
+                    errorMessage = ex.Message;
+                    errorCode = -32603;
+                }
+
+                // Notifications return 202 Accepted with empty body (per MCP Streamable HTTP spec)
+                if (isNotification)
+                {
+                    Core.DebugLog.WriteLine($"Notification '{method}' processed", "INFO", 1);
+                    response.StatusCode = 202;  // Accepted
+                    response.Close();
+                    return;
+                }
+
+                // Build JSON-RPC response
+                response.ContentType = "application/json";
+                response.StatusCode = 200;
+
+                // Envelope construction + serialization live in Core.JsonRpcEnvelope
+                // (host-free, unit-tested): lossless id echo, "id": null survival under
+                // WhenWritingNull, error-vs-result shape.
+                var responseObj = Core.JsonRpcEnvelope.Build(responseId, result, errorMessage, errorCode);
+                var responseJson = Core.JsonRpcEnvelope.Serialize(responseObj);
+
+                Core.DebugLog.WriteLine($"Responding: {responseJson.Substring(0, Math.Min(LOG_TRUNCATE_LENGTH, responseJson.Length))}...", "INFO", 1);
+
+                // Send response via HTTP
+                var bytes = Encoding.UTF8.GetBytes(responseJson);
+                await response.OutputStream.WriteAsync(bytes, 0, bytes.Length);
+                await response.OutputStream.FlushAsync();
+            }
+            catch (Exception ex)
+            {
+                Core.DebugLog.WriteLine($"JSON-RPC error: {ex.Message}", "ERROR", 0);
+                response.StatusCode = 400;
+            }
+            finally
+            {
+                response.Close();
+            }
+        }
+
+        /// <summary>
+        /// Dispatch a JSON-RPC method
+        /// </summary>
+        private async Task<object> DispatchMethodAsync(string method, JsonElement paramsEl)
+        {
+            switch (method)
+            {
+                case "initialize":
+                    return HandleInitialize();
+                case "initialized":
+                case "notifications/initialized":
+                    return new { };
+                case "tools/list":
+                    return HandleToolsList();
+                case "tools/call":
+                    return await HandleToolCallAsync(paramsEl);
+                case "resources/list":
+                    return HandleResourcesList();
+                case "resources/read":
+                    return HandleResourcesRead(paramsEl);
+                case "prompts/list":
+                    return HandlePromptsList();
+                case "prompts/get":
+                    return HandlePromptsGet(paramsEl);
+                case "ping":
+                    return new { };
+                default:
+                    throw new Exception($"Unknown method: {method}");
+            }
+        }
+
+        private object HandleInitialize()
+        {
+            // Informational, not assembly, version: the assembly version drops the pre-release tag,
+            // so every 1.5.0 pre-release reports an identical 1.5.0.0 and a tester cannot confirm
+            // which build they are on — the thing pre-releases exist to let them do.
+            var assembly = Assembly.GetExecutingAssembly();
+            var informational = assembly
+                .GetCustomAttribute<AssemblyInformationalVersionAttribute>()?.InformationalVersion;
+            var version = BuildVersion.Describe(informational, assembly.GetName().Version);
+            return new
+            {
+                protocolVersion = "2025-06-18",
+                capabilities = new
+                {
+                    tools = new { },
+                    resources = new { subscribe = false, listChanged = false },
+                    prompts = new { listChanged = false }
+                },
+                serverInfo = new { name = "hyperceps", version },
+                instructions = GetServerInstructions(version)
+            };
+        }
+
+        private string GetServerInstructions(string version)
+        {
+            // Hyperceps: name, version and the companion skill come first (Core/SkillPairing).
+            return SkillPairing.Header(version) + @"READ FIRST: gh://docs/getting-started (use resources/read)
+
+WORKING METHOD (every tool call is a full round trip, so fewer, larger calls are much cheaper):
+1. Read the canvas once with gh_canvas(action='outline'): each group, what flows in and out of it,
+   sliders and errors, in one short call. Then group='NAME' for how one group is wired inside, or
+   id='NAME' for what is around one object. Then plan.
+2. For two or more changes, use ONE gh_batch call; single-step tools are for a single change.
+3. Build large work one block per batch (typically 20-80 objects) and check each block before the next.
+4. Graft, flatten, simplify and reverse are port settings (inputModifiers / outputModifiers), not
+   Graft Tree / Flatten Tree / Simplify Tree / Reverse List components. A list of values is one panel,
+   one value per line - not a comma list plus Text Split.
+5. Refer to existing objects by nickname (or GUID prefix) and reuse refs from earlier batches. These
+   names work as the id in EVERY tool (gh_script, gh_inspect, gh_canvas, gh_wire), not only gh_batch.
+6. After a change that affects tree structure, check those outputs with gh_inspect(action='tree').
+7. Send the real gh_batch: a batch with errors changes nothing and lists them all, so a dry run of the
+   whole block only means writing it twice. Use options.dryRun to try a few guessed names first.
+8. To check results across slider (or value list, toggle) values, use ONE
+   gh_document(action='sweep', id='SLIDER', values='[5,7,9]', watch='[""OUTPUT"", ""obj.port""]'): it sets
+   each value, solves, reports item counts and errors, and puts the control back.
+gh_batch checks everything before changing anything, applies the batch as one undo step, pauses the
+solver, solves once and returns a short summary; leave out x/y and it lays objects out left to right.
+NAMING: never rename native components. Give capitalised nicknames to the parameters at a block's
+edges and to input panels/sliders (""TRUSS DEPTH (m)""); name script components after their function;
+put each block in a group named in capitals after what it makes; refs are lowercase.
+LICHEN THALLI: groups that outline shows as THALLUS carry the author's description and properties;
+read them to understand a block's purpose. Hyperceps never changes a Thallus (its members, name,
+colour or hidden T output); the user does that in Grasshopper with Lichen.
+
+UNIFIED TOOLS (use action='help' for details):
+- gh_canvas: outline, add, delete, move, rename, find, search, list, info, bounds, validate, constant, bake, zoom, view, get, set, config, preview, enable, group_create, group_delete, group_add, group_remove, group_list, group_rename, group_color, group_move, zoomable, modifier
+- gh_wire: connect, disconnect, list, clear, validate
+- gh_document: info, save, clear, solver, recompute (rejected while a solution is running), sweep (a control through several values, one call), undo, redo (both disabled — use snapshot/revert), snapshot, revert, snapshots, snapshot_delete (max 20 snapshots kept; oldest evicted), capture_canvas, capture_viewport, capture_region, capture_views
+- gh_script: get, set, configure, info (set/configure rebuild the component from the new source and report rebuilt/verified; compile errors surface on the component — check gh_inspect(action='status') after writing code)
+- gh_inspect: connection, status, outputs, trace, disconnected, geometry, log, reports, categories, docs, tree (branch paths and counts; names like gh_batch)
+- rhino_scene: objects, select, deselect, set_layer, set_name, layers, layer_create, layer_set, layer_delete, hide, show, delete, set_color, bbox, place_image, script
+- rhino_render: display, camera, zoom, modes, render, settings, ground, sun, skylight, view_save, view_load, view_list, view_delete, light_add, light_list, light_set, light_delete, material_list, material_library, material_instantiate, material_create, material_texture, material_apply, material_delete, env_list, env_current, env_set, env_create, env_delete
+
+STATUS BLOCK: every tool response carries a compact ""status"" object — {document, ui, solving}, plus
+solving_since / modal_inferred / solving_document / hint when something is off. ""document"" is the
+.gh file the call acted on; check it, because tools follow whichever canvas tab the human focused.
+""solving_document"" appears only when a DIFFERENT open definition is the one holding the solver.
+
+BUSY IS NOT DEAD. If a call is slow or silent, call gh_inspect(action='connection') — it answers from
+cached state and never touches the document, so it replies even when everything else is stuck:
+- ui='blocked' + solving=true  -> Grasshopper is mid-solve. WAIT and retry; heavy solves take minutes.
+- modal_inferred=true          -> a modal dialog is open in Rhino. Only a HUMAN can clear it. Stop
+                                  retrying and tell the user what to dismiss.
+- ui='responsive'              -> the host is fine; treat any error as a real tool error.
+
+Key points:
+- gh_batch pauses the solver itself. For bulk single-step edits: gh_document(action='solver', enabled=false)
+- Ambiguous names (""Line"", ""Circle""): use GUID or Category/Name format, or gh_batch ""param""
+- Param specs (param/sourceParam/targetParam) on a COMPONENT: a name, a nickname, or a 0-based
+  index. An index that does not exist is refused and the error names the valid range — it is never
+  rescued as a name match, so add the port first (gh_canvas action='zoomable') rather than
+  re-asking. A free-floating parameter object has no ports of its own, so it IS the target and the
+  spec is ignored
+- Spacing (only when placing by hand): 150px horizontal, 70px vertical
+- CRITICAL: Inside a cluster editor, NEVER advise the user to press F5 or use Grasshopper's native recompute. It will destroy cluster inputs. Use gh_document(action='recompute') instead — it is cluster-safe.
+
+VERIFY PERIODICALLY: gh_batch results already list errors and warnings that changed downstream; after
+a section of work, also run gh_inspect(action='status') to catch errors elsewhere.
+
+Resources: gh://docs/getting-started, gh://docs/data-trees, gh://docs/common-errors, gh://component/{name}, gh://patterns/*
+";
+        }
+
+        private object HandleToolsList()
+        {
+            var tools = _tools.Select(t => new
+            {
+                name = t.Name,
+                description = t.Description,
+                inputSchema = t.InputSchema.HasValue ? (object)t.InputSchema.Value : new
+                {
+                    type = "object",
+                    properties = t.Parameters.ToDictionary(
+                        p => p.Name,
+                        p => new { type = p.Type, description = p.Description }
+                    ),
+                    required = t.Parameters.Where(p => p.IsRequired).Select(p => p.Name).ToArray()
+                }
+            }).ToList();
+
+            return new { tools };
+        }
+
+        private async Task<object> HandleToolCallAsync(JsonElement paramsEl)
+        {
+            var name = paramsEl.GetProperty("name").GetString();
+            var arguments = paramsEl.TryGetProperty("arguments", out var a) ? a : default;
+
+            // Capture the context once. Stop() releases _context during teardown; a handler still
+            // in flight then would otherwise hand a null context to the tool and NRE. Capturing a
+            // local (the field read is atomic) and guarding it turns that race into a clean,
+            // structured "shutting down" result.
+            var ctx = _context;
+            if (ctx == null)
+            {
+                var shuttingDown = Core.McpResultFormatter.FormatExceptionResult(
+                    new InvalidOperationException("MCP server is shutting down; the request was not processed."));
+                return new
+                {
+                    content = new[] { new { type = "text", text = WithStatus(shuttingDown) } },
+                    isError = true
+                };
+            }
+
+            RecordCommand(name);
+
+            // Unknown tool stays a protocol error (the client addressed a tool that doesn't
+            // exist); everything past this point concerns a KNOWN tool, so failures become
+            // structured {success:false} tool results instead.
+            var tool = _tools.FirstOrDefault(t => t.Name == name);
+            if (tool == null)
+                throw new Exception($"Unknown tool: {name}");
+
+            object result;
+            try
+            {
+                // Create tool instance (all tool classes take GrasshopperContext)
+                var instance = Activator.CreateInstance(tool.DeclaringType, ctx);
+
+                // Build method arguments
+                var methodParams = tool.Method.GetParameters();
+                var args = new object[methodParams.Length];
+
+                for (int i = 0; i < methodParams.Length; i++)
+                {
+                    var param = methodParams[i];
+                    if (arguments.ValueKind == JsonValueKind.Object &&
+                        arguments.TryGetProperty(param.Name, out var argVal))
+                    {
+                        args[i] = ConvertJsonValue(argVal, param.ParameterType);
+                    }
+                    else if (param.HasDefaultValue)
+                    {
+                        args[i] = param.DefaultValue;
+                    }
+                    else
+                    {
+                        // Required parameter is missing - throw a clear error
+                        throw new InvalidOperationException($"Missing required parameter: {param.Name}");
+                    }
+                }
+
+                // Invoke the tool method
+                result = tool.Method.Invoke(instance, args);
+
+                // Handle async methods
+                if (result is Task task)
+                {
+                    await task;
+                    var resultProperty = task.GetType().GetProperty("Result");
+                    result = resultProperty?.GetValue(task);
+                }
+            }
+            catch (Exception ex) // prawduct:allow prawduct/broad-except -- tool-invocation boundary: any failure for a KNOWN tool (construction, argument coercion, missing required param, tool body) must become a structured {success:false} result, not a JSON-RPC protocol error (project error-handling contract)
+            {
+                // Log the full exception (type + stack) operator-side for root-causing; the client
+                // payload stays message-only via FormatExceptionResult.
+                Core.DebugLog.WriteLine($"Tool '{name}' threw: {ex}", "ERROR", 0);
+                var errorText = Core.McpResultFormatter.FormatExceptionResult(ex);
+                return new
+                {
+                    // A failure is exactly when the caller most needs to know whether the host was
+                    // busy, wedged, or fine — so the status block rides on errors too.
+                    content = new[] { new { type = "text", text = WithStatus(errorText) } },
+                    isError = true
+                };
+            }
+
+            // Format as MCP tool result. isError reflects the tool's own success flag
+            // (see Core.McpResultFormatter) so clients see a failed tool result as an error.
+            // Status is folded in FIRST so isError is computed from the payload the caller
+            // actually receives.
+            // Hyperceps: a one-line gh_batch suggestion after repeated single-step edits.
+            var action = arguments.ValueKind == JsonValueKind.Object && arguments.TryGetProperty("action", out var actionEl)
+                && actionEl.ValueKind == JsonValueKind.String ? actionEl.GetString() : null;
+            var nudged = Core.SingleStepNudge.AddTo(result?.ToString() ?? "", _nudge.Observe(name, action));
+
+            var resultText = WithStatus(nudged);
+            return new
+            {
+                content = new[] { new { type = "text", text = resultText } },
+                isError = Core.McpResultFormatter.IsErrorResult(resultText)
+            };
+        }
+
+        /// <summary>
+        /// The single choke point where every tool result gains its compact status block. Doing it
+        /// here rather than in each tool is what makes the block always-on: 19 tool files cannot
+        /// drift out of sync with one they never mention.
+        ///
+        /// <para>Never throws and never blocks. It reads only cached liveness state — no marshaling
+        /// to the UI thread, no document lock — and any failure returns the original result
+        /// untouched, because a diagnostic that can break a tool result is worse than no
+        /// diagnostic.</para>
+        /// </summary>
+        private string WithStatus(string resultText)
+        {
+            try
+            {
+                return Core.StatusEnvelope.InjectCompact(resultText, Core.SolverState.Shared.Derive());
+            }
+            catch (Exception ex) // prawduct:allow prawduct/broad-except -- the status block is advisory: whatever goes wrong deriving or injecting it, the caller must still receive the tool's own result
+            {
+                Core.DebugLog.WriteLine($"Status injection failed: {ex.Message}", "WARN", 1);
+                return resultText;
+            }
+        }
+
+        /// <summary>
+        /// This server's own counters for the Cordyceps layer of the status block. Reads volatile
+        /// fields only — it is invoked on HTTP worker threads while answering, so it must stay
+        /// allocation-cheap and lock-free.
+        /// </summary>
+        private Core.StatusInputs CurrentStatusInputs()
+        {
+            var running = _state == Core.ServerState.Running;
+            return new Core.StatusInputs
+            {
+                ServerListening = running,
+                Port = _port,
+                InFlightRequests = _inFlight.Count,
+                UptimeSeconds = running ? (int)(DateTime.UtcNow - _startTime).TotalSeconds : 0,
+                CommandCount = CommandCount,
+            };
+        }
+
+        /// <summary>
+        /// Handle resources/list request
+        /// </summary>
+        private object HandleResourcesList()
+        {
+            var resources = ResourceRegistry.Instance.ListResources();
+            return new { resources };
+        }
+
+        /// <summary>
+        /// Handle resources/read request
+        /// </summary>
+        private object HandleResourcesRead(JsonElement paramsEl)
+        {
+            var uri = paramsEl.TryGetProperty("uri", out var u) ? u.GetString() : null;
+
+            if (string.IsNullOrEmpty(uri))
+            {
+                throw new Exception("Resource URI is required");
+            }
+
+            var content = ResourceRegistry.Instance.ReadResource(uri);
+
+            if (content == null)
+            {
+                throw new Exception($"Resource not found: {uri}");
+            }
+
+            return new
+            {
+                contents = new[]
+                {
+                    new
+                    {
+                        uri = content.Uri,
+                        mimeType = content.MimeType,
+                        text = content.Text
+                    }
+                }
+            };
+        }
+
+        /// <summary>
+        /// Handle prompts/list request
+        /// </summary>
+        private object HandlePromptsList()
+        {
+            var prompts = PromptRegistry.Instance.ListPrompts();
+            return new { prompts };
+        }
+
+        /// <summary>
+        /// Handle prompts/get request
+        /// </summary>
+        private object HandlePromptsGet(JsonElement paramsEl)
+        {
+            var name = paramsEl.TryGetProperty("name", out var n) ? n.GetString() : null;
+
+            if (string.IsNullOrEmpty(name))
+            {
+                throw new Exception("Prompt name is required");
+            }
+
+            // Extract arguments if provided
+            var arguments = new Dictionary<string, string>();
+            if (paramsEl.TryGetProperty("arguments", out var argsEl) && argsEl.ValueKind == JsonValueKind.Object)
+            {
+                foreach (var prop in argsEl.EnumerateObject())
+                {
+                    arguments[prop.Name] = prop.Value.GetString() ?? "";
+                }
+            }
+
+            var prompt = PromptRegistry.Instance.GetPrompt(name, arguments);
+
+            if (prompt == null)
+            {
+                throw new Exception($"Prompt not found: {name}");
+            }
+
+            return new
+            {
+                description = prompt.Description,
+                messages = new[]
+                {
+                    new
+                    {
+                        role = "user",
+                        content = new
+                        {
+                            type = "text",
+                            text = prompt.Content
+                        }
+                    }
+                }
+            };
+        }
+
+        private static object ConvertJsonValue(JsonElement element, Type targetType) => Core.JsonTypeConverter.ConvertJsonValue(element, targetType);
+
+        /// <summary>
+        /// Record that a command was executed
+        /// </summary>
+        public void RecordCommand(string commandType)
+        {
+            _commandStats.Record($"{commandType} @ {DateTime.Now:HH:mm:ss}");
+            CordycepsComponent.RefreshComponent();
+        }
+
+        // Helper classes
+
+        private class ToolInfo
+        {
+            public string Name { get; set; }
+            public string Description { get; set; }
+            public Type DeclaringType { get; set; }
+            public MethodInfo Method { get; set; }
+            public List<ToolParameter> Parameters { get; set; }
+            /// <summary>Embedded schema from [McpInputSchema], replacing the generated one.</summary>
+            public JsonElement? InputSchema { get; set; }
+        }
+
+        private class ToolParameter
+        {
+            public string Name { get; set; }
+            public string Description { get; set; }
+            public string Type { get; set; }
+            public bool IsRequired { get; set; }
+        }
+
+        #region IDisposable
+
+        /// <summary>
+        /// Dispose resources used by the MCP server
+        /// </summary>
+        public void Dispose()
+        {
+            Dispose(true);
+            GC.SuppressFinalize(this);
+        }
+
+        /// <summary>
+        /// Dispose implementation
+        /// </summary>
+        protected virtual void Dispose(bool disposing)
+        {
+            if (_disposed) return;
+
+            if (disposing)
+            {
+                Stop();
+            }
+
+            _disposed = true;
+        }
+
+        #endregion
+    }
+
+    // Attributes for tool discovery (matching the MCP SDK pattern)
+
+    /// <summary>
+    /// Marks a class as containing MCP server tools
+    /// </summary>
+    [AttributeUsage(AttributeTargets.Class)]
+    public class McpServerToolTypeAttribute : Attribute { }
+
+    /// <summary>
+    /// Marks a method as an MCP server tool
+    /// </summary>
+    [AttributeUsage(AttributeTargets.Method)]
+    public class McpServerToolAttribute : Attribute { }
+}

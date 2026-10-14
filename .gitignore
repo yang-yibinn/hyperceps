@@ -1,0 +1,87 @@
+# Build results
+[Bb]in/
+[Oo]bj/
+[Dd]ebug/
+[Rr]elease/
+dist/
+
+# Visual Studio
+.vs/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+
+# NuGet
+*.nupkg
+packages/
+project.lock.json
+project.fragment.lock.json
+artifacts/
+
+# Yak packages
+*.yak
+
+# JetBrains Rider
+.idea/
+*.sln.iml
+
+# macOS
+.DS_Store
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+*.sln
+
+# Prawduct session files
+.claude/settings.local.json
+.prawduct/.critic-active
+.prawduct/.critic-findings.json
+.prawduct/.governance-ledger.jsonl
+.prawduct/.test-evidence.json
+.prawduct/.pr-reviews/
+.prawduct/.session-git-baseline
+.prawduct/.session-handoff.md
+.prawduct/.session-reflected
+.prawduct/.session-start
+.prawduct/.subagent-briefing.md
+.prawduct/.gates-waived
+.prawduct/.advisories.json
+.prawduct/.work-model-index.json
+.prawduct/reflections.md
+__pycache__/
+
+# Prawduct plugin version marker (per-repo last-seen)
+.prawduct/.prawduct-version
+
+# Prawduct durable artifacts are tracked governance state — override the broad
+# `artifacts/` build-output rule above, which would otherwise swallow them.
+!.prawduct/artifacts/
+!.prawduct/artifacts/**
+
+# Claude memory folder accidentally written to repo root; belongs in ~/.claude
+memory/
+
+# Prawduct session files
+.prawduct/.bug-inbox
+.prawduct/.critic-partials/
+.prawduct/.critic-partials-archive/
+.prawduct/.handoff-notes.md
+.prawduct/.session-base-tree
+
+# Agent worktrees created by Claude Code subagents — transient, and an untracked
+# directory here aborts scripts/release.sh require_clean_tree.
+.claude/worktrees/
+
+# Built plugin output. The csproj CopyToReleases target writes here so Grasshopper can load a
+# local build; it is a build artifact, not a tracked file. The published download is the
+# GitHub Release asset, which scripts/release.sh builds and attaches at publish time.
+releases/
+
+# Hyperceps: scratch Grasshopper files for testing (never real project files)
+scratch/
+
+# Hyperceps: Python environment for tests/ (pip install -r tests/requirements.txt)
+.venv/
