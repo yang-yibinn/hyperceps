@@ -34,7 +34,7 @@ namespace Cordyceps.Tools.Batch
                 if (_cached != null && _cachedCount == proxies.Count)
                     return _cached;
 
-                var libraries = new Dictionary<Guid, string>();
+                var libraries = new Dictionary<Guid, (string Plugin, bool BuiltIn)>();
                 var deprecation = DeprecationRegistry.Instance;
                 var candidates = new List<TypeCandidate>(proxies.Count);
 
@@ -49,11 +49,11 @@ namespace Cordyceps.Tools.Batch
                         catch (Exception) { /* a proxy that can't report its type is judged on its flags alone */ }
                     }
 
-                    if (!libraries.TryGetValue(proxy.LibraryGuid, out var plugin))
+                    if (!libraries.TryGetValue(proxy.LibraryGuid, out var library))
                     {
                         var info = Instances.ComponentServer.FindAssembly(proxy.LibraryGuid);
-                        plugin = info == null ? null : info.IsCoreLibrary ? "Grasshopper" : info.Name;
-                        libraries[proxy.LibraryGuid] = plugin;
+                        library = (info == null ? null : info.IsCoreLibrary ? "Grasshopper" : info.Name, info?.IsCoreLibrary == true);
+                        libraries[proxy.LibraryGuid] = library;
                     }
 
                     candidates.Add(new TypeCandidate
@@ -63,7 +63,8 @@ namespace Cordyceps.Tools.Batch
                         SubCategory = proxy.Desc.SubCategory,
                         Guid = proxy.Guid,
                         Deprecated = deprecated,
-                        Plugin = plugin
+                        Plugin = library.Plugin,
+                        BuiltIn = library.BuiltIn
                     });
                 }
 

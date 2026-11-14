@@ -4,6 +4,7 @@ using System.Diagnostics;
 using System.Linq;
 using Cordyceps.Core;
 using Cordyceps.Core.Batch;
+using Cordyceps.Core.Sweep;
 using Grasshopper;
 using Grasshopper.Kernel;
 using Grasshopper.Kernel.Undo;
@@ -60,6 +61,7 @@ namespace Cordyceps.Tools.Batch
             if (!plan.HasChanges)
             {
                 if (report.Ok) report.Warnings.Add("nothing to change");
+                ReadWatch(plan);
                 Log(spec, report, "nothing to apply");
                 return report.ToJson();
             }
@@ -129,6 +131,7 @@ namespace Cordyceps.Tools.Batch
             }
 
             Solve(doc, spec, plan, ctx, before, solverWasOn);
+            ReadWatch(plan);
             Instances.ActiveCanvas?.Invalidate();
             Log(spec, report, "applied");
             return report.ToJson();
@@ -178,6 +181,13 @@ namespace Cordyceps.Tools.Batch
 
             if (spec.Options.ReturnRuntimeMessages)
                 CollectRuntime(plan, ctx, before);
+        }
+
+        /// <summary>options.watch: each output's count, branches and short preview, after the solve.</summary>
+        private static void ReadWatch(BatchPlan plan)
+        {
+            foreach (var (name, param) in plan.Watch)
+                plan.Report.Watch.Add(SweepPlan.WatchText(WatchedOutputs.Read(name, param)));
         }
 
         /// <summary>Message state of every existing object, to spot what the batch changed downstream.</summary>

@@ -61,7 +61,7 @@
 
 ## Script Components
 
-Use `gh_script(action='info', id='...')` to inspect existing scripts.
+Use `gh_script(action='get', id='...')` once to read an existing script (`info` also returns the whole source, with the ports and messages); for only its ports and wiring use `gh_canvas(action='outline', id='...')`.
 
 **C# template:**
 ```csharp

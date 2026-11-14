@@ -46,6 +46,8 @@ namespace Cordyceps.Core
             if (!RhinoApp.InvokeRequired)
                 return action();
 
+            HostBusyGate.WaitUntilFree(); // Hyperceps: answer "busy" instead of waiting past the app's time limit
+
             return _documentLock.Run(() =>
             {
                 T result = default;
@@ -92,6 +94,8 @@ namespace Cordyceps.Core
                 action();
                 return;
             }
+
+            HostBusyGate.WaitUntilFree(); // Hyperceps: answer "busy" instead of waiting past the app's time limit
 
             _documentLock.Run(() =>
             {

@@ -25,18 +25,20 @@ namespace Cordyceps.Tests
         }
 
         [Fact]
-        public void Header_NamesTheVersionAndAsksForTheSkill()
+        public void Header_NamesTheVersionAndAsksForTheGuide()
         {
-            var header = SkillPairing.Header("1.0.0+build20261014120000");
+            var header = SkillPairing.Header("1.1.0+build20261114120000");
             var lines = header.Split(new[] { Environment.NewLine }, StringSplitOptions.None);
 
-            Assert.StartsWith("Hyperceps 1.0.0: MCP control of Grasshopper", lines[0]);
+            Assert.StartsWith("Hyperceps 1.1.0: MCP control of Grasshopper", lines[0]);
             Assert.Contains("Built from Cordyceps by Brooks Talley", lines[0]);
-            Assert.Contains("SKILL: Hyperceps is made to be used with its Claude skill \"hyperceps\" (same version, 1.0.0)", header);
-            Assert.Contains("load it now, before working on the canvas", header);
-            Assert.Contains("tell the user once", header);
-            Assert.Contains(SkillPairing.SkillZip, header);
-            Assert.Contains(SkillPairing.ReleasesUrl, header);
+            Assert.StartsWith("GUIDE FIRST: before working on the canvas", lines[2]);
+            Assert.Contains("the \"hyperceps\" skill, version 1.1.0", lines[2]);
+            Assert.Contains("If your app lists a \"hyperceps\" skill, load it", header);
+            // Without the installed skill, the plugin serves it: nothing to install.
+            Assert.Contains("Otherwise call " + SkillText.Call + ": the plugin returns the same guide", header);
+            Assert.Contains("If a loaded skill names another version, call " + SkillText.Call + " instead", header);
+            Assert.Contains("once that their installed skill doesn't match the plugin", header);
             Assert.EndsWith(Environment.NewLine + Environment.NewLine, header);
         }
 

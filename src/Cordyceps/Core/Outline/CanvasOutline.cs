@@ -17,14 +17,15 @@ namespace Cordyceps.Core.Outline
     /// errors. A canvas without groups is described by its separate networks instead: their inputs,
     /// named objects and ends.</item>
     /// <item><b>Group detail</b> (group=): one line per object, upstream first, each naming what feeds
-    /// it. Child groups and Lichen Thalli are one line each, opened with their own name.</item>
+    /// it. Child groups and Lichen Thalli are one line each, opened with their own name. 'network N'
+    /// and 'ungrouped' open the same view for objects that aren't in a group (CanvasOutline.Regions).</item>
     /// <item><b>Around</b> (id=): what feeds one object and what it feeds, a few wires each way. For
     /// canvases without groups.</item>
     /// </list>
     /// Every name in the result works as an id in every tool. Host-free so it can be unit-tested; the
     /// adapter (GhCanvasTool.Outline) reads the document into an <see cref="OutlineModel"/>.
     /// </summary>
-    public static class CanvasOutline
+    public static partial class CanvasOutline
     {
         public const int MaxGroupLines = 60;
         public const int MaxObjectLines = 150;
@@ -54,24 +55,31 @@ namespace Cordyceps.Core.Outline
             var grouped = new HashSet<string>();
             foreach (var g in m.Groups) grouped.UnionWith(m.EffectiveMembers(g));
 
+            int looseCount = 0, networkCount = 0;
             if (top.Count > 0)
             {
                 o["groups"] = Capped(top.Select(g => GroupLine(m, g)), MaxGroupLines);
                 var loose = m.Nodes.Where(n => !grouped.Contains(n.Id)).Select(n => n.Id).ToList();
+                looseCount = loose.Count;
                 if (loose.Count > 0)
                     o["ungrouped"] = RegionText(m, loose);
             }
             else
             {
-                AddNetworks(m, o);
+                networkCount = AddNetworks(m, o);
             }
 
             var problems = Problems(m);
             if (problems.Count > 0) o["problems"] = Capped(problems, MaxProblems);
 
             o["next"] = top.Count > 0
-                ? "group='NAME' shows how a group is wired inside (a JSON list for several); id='NAME' shows what feeds one object and what it feeds"
-                : "id='NAME' (an input, an end or a named object) shows what feeds it and what it feeds; depth=N wires each way (default 2)";
+                ? "group='NAME' shows how a group is wired inside (a JSON list for several); "
+                  + (looseCount > 0 ? $"group='{UngroupedName}' lists the objects outside groups the same way; " : "")
+                  + "id='NAME' shows what feeds one object and what it feeds"
+                : (networkCount == 1 ? "group='network' lists every object of the network, upstream first, with what feeds each input; "
+                   : networkCount > 1 ? "group='network 1' lists every object of that network, upstream first, with what feeds each input (a JSON list for several); "
+                   : "")
+                  + "id='NAME' (an input, an end or a named object) shows what feeds it and what it feeds; depth=N wires each way (default 2)";
             return o;
         }
 
@@ -130,13 +138,10 @@ namespace Cordyceps.Core.Outline
                 .Select(id => m.GroupById[id]).ToList();
         }
 
-        private static void AddNetworks(OutlineModel m, JObject o)
+        /// <summary>The networks and unconnected objects of a canvas without groups; returns how many networks.</summary>
+        private static int AddNetworks(OutlineModel m, JObject o)
         {
-            var all = m.Nodes.Select(n => n.Id).ToList();
-            var alone = all.Where(id => m.Upstream(id).Count == 0 && m.Downstream(id).Count == 0).ToList();
-            var aloneSet = new HashSet<string>(alone);
-            var networks = Components(m, all.Where(id => !aloneSet.Contains(id)).ToList())
-                .OrderByDescending(c => c.Count).ToList();
+            var (networks, alone) = Networks(m);
 
             if (networks.Count > 0)
             {
@@ -145,6 +150,7 @@ namespace Cordyceps.Core.Outline
             }
             if (alone.Count > 0)
                 o["unconnected"] = Count(alone.Count, "object") + ": " + Join(alone.Select(id => Label(m.NodeById[id])), MaxNames);
+            return networks.Count;
         }
 
         /// <summary>
@@ -195,7 +201,7 @@ namespace Cordyceps.Core.Outline
             return new JObject { ["success"] = true, ["groups"] = list };
         }
 
-        private static JObject GroupDetail(OutlineModel m, OutlineGroup g, ref int budget)
+        private static JObject GroupDetail(OutlineModel m, OutlineGroup g, ref int budget, int cap = MaxObjectLines)
         {
             var members = m.EffectiveMembers(g);
             var o = new JObject { ["group"] = g.Title, ["id"] = g.ShortId };
@@ -254,7 +260,7 @@ namespace Cordyceps.Core.Outline
             if (shown < order.Count)
             {
                 o["more"] = order.Count - shown;
-                o["note"] = $"{order.Count - shown} more not shown (at most {MaxObjectLines} lines per call); ask for one child group, or use id= on an object";
+                o["note"] = $"{order.Count - shown} more not shown (at most {cap} lines per call); ask for one child group, or use id= on an object";
             }
 
             var outbound = Outbound(m, members);
@@ -314,6 +320,8 @@ namespace Cordyceps.Core.Outline
 
             if (n.Level != null)
                 parts.Add($"{n.Level}: {Clip(OneLine(n.Message), 100)}");
+            if (n.Remark != null)
+                parts.Add(n.Remark);
             return string.Join(" · ", parts);
         }
 
@@ -431,7 +439,7 @@ namespace Cordyceps.Core.Outline
             errors.Add($"no group named '{name}'."
                 + (closest != null ? $" Did you mean '{closest}'?"
                     : m.Groups.Count > 0 ? $" Groups: {Join(m.Groups.Select(g => g.Title), 10)}"
-                    : " This canvas has no groups; use id= on an object instead"));
+                    : " This canvas has no groups; group='network 1' (or 'network' when there is one) lists a network, id= shows what is around one object"));
             return null;
         }
 

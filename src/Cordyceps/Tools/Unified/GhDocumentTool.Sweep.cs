@@ -24,8 +24,12 @@ namespace Cordyceps.Tools.Unified
     {
         private string ActionSweep(string id, string values, string watch)
         {
-            var liveness = SolverState.Shared.Derive();
-            if (liveness.Solving || liveness.ModalInferred)
+            // Wait for a running solve as gh_batch does (after a slow sweep the restored value re-solves
+            // after the answer, so the next sweep usually arrives during a solve); a dialog only counts
+            // when the reading persists.
+            var (outcome, liveness) = SolveWait.UntilSolveEnds(() => SolverState.Shared.Derive(), HostBusyGate.MaxWait,
+                System.Threading.Thread.Sleep, () => DateTime.UtcNow);
+            if (outcome != SolveWait.Outcome.Free)
                 return StatusEnvelope.BusyResult(liveness);
 
             if (!TryParseWatch(watch, out var watchNames, out var watchError))
@@ -48,7 +52,7 @@ namespace Cordyceps.Tools.Unified
                 if (control == null)
                     return ToolHelpers.ErrorResponse($"{item.Label} is a {item.Obj.Name}; sweep moves a number slider, a value list or a toggle");
 
-                var watched = ResolveWatch(canvas, watchNames, errors);
+                var watched = WatchedOutputs.Resolve(canvas, watchNames, i => watchNames.Count == 1 ? "watch" : $"watch[{i}]", errors);
                 if (watched.Count > SweepPlan.MaxWatch)
                     errors.Add($"watch: at most {SweepPlan.MaxWatch} outputs (a component without a port counts each of its outputs)");
 
@@ -63,13 +67,20 @@ namespace Cordyceps.Tools.Unified
                 var results = new JArray();
                 string stopped = null, failure = null, restoreFailure = null;
 
+                // The original value's last solve, from Grasshopper's own per-component times: what
+                // putting the control back will cost, which the swept values may not show.
+                long originalMs = DownstreamSolveMs(item.Obj);
                 var clock = Stopwatch.StartNew();
-                long lastMs = 0;
+                long lastMs = 0, slowestMs = 0;
+                bool afterAnswer = false;
                 try
                 {
                     for (int i = 0; i < steps.Count; i++)
                     {
-                        if (i > 0 && clock.Elapsed.TotalSeconds + lastMs / 1000.0 > SweepPlan.TimeBudgetSeconds)
+                        // The next value takes about as long as the last; putting the control back takes
+                        // about as long as the slowest value or the original, unless it happens after the answer.
+                        if (i > 0 && clock.Elapsed.TotalSeconds + lastMs / 1000.0
+                            + SweepPlan.RestoreAllowanceSeconds(slowestMs, originalMs, clock.Elapsed.TotalSeconds) > SweepPlan.TimeBudgetSeconds)
                         {
                             stopped = $"stopped after {i} of {steps.Count} values to stay within the time limit (about {SweepPlan.TimeBudgetSeconds:0} s per call); sweep the rest in another call";
                             break;
@@ -77,10 +88,11 @@ namespace Cordyceps.Tools.Unified
 
                         var r = new SweepStepResult { Label = steps[i].Label };
                         r.SolveMs = lastMs = SetAndSolve(doc, item.Obj, steps[i]);
+                        slowestMs = Math.Max(slowestMs, lastMs);
                         if (item.Obj is GH_NumberSlider slider && slider.CurrentValue != steps[i].Number)
                             r.Label += $" (the slider took {SweepPlan.Number(slider.CurrentValue)})";
                         foreach (var (name, param) in watched)
-                            r.Watch.Add(ReadWatch(name, param));
+                            r.Watch.Add(WatchedOutputs.Read(name, param));
                         CountProblems(doc, infraIds, before, canvas, r);
                         results.Add(SweepPlan.Line(r));
                     }
@@ -92,9 +104,10 @@ namespace Cordyceps.Tools.Unified
                 }
                 finally
                 {
+                    afterAnswer = SweepPlan.RestoreAfterAnswer(slowestMs, originalMs, clock.Elapsed.TotalSeconds, failure != null);
                     try
                     {
-                        Restore(doc, item.Obj, original);
+                        Restore(doc, item.Obj, original, afterAnswer);
                     }
                     catch (Exception ex) // prawduct:allow prawduct/broad-except -- report a control that could not be put back rather than hide it
                     {
@@ -113,13 +126,13 @@ namespace Cordyceps.Tools.Unified
                     ["control"] = control.Describe(),
                     ["results"] = results
                 };
-                if (restoreFailure == null) o["restored"] = $"{control.Name} = {control.Current}";
+                if (restoreFailure == null) o["restored"] = SweepPlan.RestoredText(control.Name, control.Current, afterAnswer, originalMs > 0 ? originalMs : slowestMs);
                 if (stopped != null) o["stopped"] = stopped;
                 if (notes.Count > 0) o["notes"] = new JArray(notes);
                 var problems = new[] { failure, restoreFailure }.Where(e => e != null).ToList();
                 if (problems.Count > 0) o["error"] = string.Join("; ", problems);
 
-                DebugLog.Info($"gh_document sweep {control.Name}: {results.Count} of {steps.Count} values, {clock.ElapsedMilliseconds} ms{(failure != null ? ", failed" : "")}");
+                DebugLog.Info($"gh_document sweep {control.Name}: {results.Count} of {steps.Count} values, {clock.ElapsedMilliseconds} ms{(failure != null ? ", failed" : "")}{(afterAnswer ? ", restore solves after the answer" : "")}");
                 return o.ToString(Formatting.None);
             });
         }
@@ -140,7 +153,7 @@ namespace Cordyceps.Tools.Unified
                 names = JArray.Parse(s).Select(t => t.Type == JTokenType.String ? t.Value<string>().Trim() : null).ToList();
                 if (names.Any(string.IsNullOrEmpty))
                 {
-                    error = "'watch' as a list must hold output names, e.g. [\"TOP BRACING\", \"chk.out\"]";
+                    error = "'watch' as a list must hold output names, e.g. [\"DIAGONALS\", \"chk.out\"]";
                     return false;
                 }
                 return true;
@@ -150,33 +163,6 @@ namespace Cordyceps.Tools.Unified
                 error = $"'watch' starts with '[' but isn't a JSON list: {ex.Message}";
                 return false;
             }
-        }
-
-        /// <summary>Each watched name as outputs: an object's outputs, or 'obj.port' (gh_inspect tree's rules).</summary>
-        private static List<(string Name, IGH_Param Param)> ResolveWatch(BatchCanvas canvas, List<string> names, List<string> errors)
-        {
-            var result = new List<(string, IGH_Param)>();
-            for (int i = 0; i < names.Count; i++)
-            {
-                var path = names.Count == 1 ? "watch" : $"watch[{i}]";
-                var (w, port) = canvas.ResolveObjectOrPort(names[i], path, errors);
-                if (w == null) continue;
-
-                if (port != null)
-                {
-                    var p = canvas.ResolvePort(w, port, false, path, errors);
-                    if (p != null) result.Add((names[i], p));
-                    continue;
-                }
-                if (w.Outputs.Count == 0)
-                {
-                    errors.Add($"{path}: {w.Label} has no outputs");
-                    continue;
-                }
-                foreach (var output in w.Outputs)
-                    result.Add((w.Obj is IGH_Component ? $"{names[i]}.{output.NickName}" : names[i], output));
-            }
-            return result;
         }
 
         private static SweepControl ReadControl(IGH_DocumentObject obj, BatchCanvas canvas)
@@ -231,7 +217,7 @@ namespace Cordyceps.Tools.Unified
         /// </summary>
         private static long SetAndSolve(GH_Document doc, IGH_DocumentObject obj, SweepStep step)
         {
-            return Solve(doc, obj, () =>
+            return Solve(doc, obj, false, () =>
             {
                 switch (obj)
                 {
@@ -249,9 +235,41 @@ namespace Cordyceps.Tools.Unified
             });
         }
 
-        private static void Restore(GH_Document doc, IGH_DocumentObject obj, object original)
+        /// <summary>
+        /// The last solve time of everything downstream of <paramref name="control"/>, summed from Grasshopper's
+        /// per-component times. Read before the sweep, it is what solving the original value again costs.
+        /// </summary>
+        private static long DownstreamSolveMs(IGH_DocumentObject control)
         {
-            Solve(doc, obj, () =>
+            if (!(control is IGH_Param start)) return 0;
+            var seen = new HashSet<Guid>();
+            var queue = new Queue<IGH_Param>();
+            queue.Enqueue(start);
+            double total = 0;
+            while (queue.Count > 0)
+            {
+                foreach (var recipient in queue.Dequeue().Recipients)
+                {
+                    var owner = recipient.Attributes?.GetTopLevel?.DocObject;
+                    if (owner == null || !seen.Add(owner.InstanceGuid)) continue;
+                    if (owner is IGH_ActiveObject active)
+                        total += active.ProcessorTime.TotalMilliseconds;
+                    if (owner is IGH_Component component)
+                        foreach (var output in component.Params.Output) queue.Enqueue(output);
+                    else if (owner is IGH_Param param)
+                        queue.Enqueue(param);
+                }
+            }
+            return (long)total;
+        }
+
+        /// <summary>
+        /// Puts the control back. With <paramref name="afterAnswer"/> the value is set now and the solve is
+        /// scheduled, so the call answers first (see SweepPlan.RestoreAfterAnswer).
+        /// </summary>
+        private static void Restore(GH_Document doc, IGH_DocumentObject obj, object original, bool afterAnswer)
+        {
+            Solve(doc, obj, afterAnswer, () =>
             {
                 switch (obj)
                 {
@@ -269,7 +287,7 @@ namespace Cordyceps.Tools.Unified
             });
         }
 
-        private static long Solve(GH_Document doc, IGH_DocumentObject obj, Action set)
+        private static long Solve(GH_Document doc, IGH_DocumentObject obj, bool scheduled, Action set)
         {
             doc.Enabled = false;
             try
@@ -286,20 +304,13 @@ namespace Cordyceps.Tools.Unified
 
             var clock = Stopwatch.StartNew();
             doc.Enabled = true;
+            if (scheduled)
+            {
+                doc.ScheduleSolution(1);
+                return 0;
+            }
             doc.NewSolution(false);
             return clock.ElapsedMilliseconds;
-        }
-
-        private static SweepWatchResult ReadWatch(string name, IGH_Param param)
-        {
-            var data = param.VolatileData;
-            var w = new SweepWatchResult { Name = name, Items = data.DataCount, Branches = data.PathCount };
-            var owner = param.Attributes?.GetTopLevel?.DocObject as IGH_ActiveObject;
-            if (owner != null && owner.Phase != GH_SolutionPhase.Computed)
-                w.Solved = false;
-            if (data.DataCount > 0 && data.DataCount <= 3)
-                w.Preview = SweepPlan.Preview(data.AllData(true).Select(g => g?.ScriptVariable()).ToList());
-            return w;
         }
 
         private static Dictionary<Guid, GH_RuntimeMessageLevel> ProblemLevels(GH_Document doc, HashSet<Guid> infraIds)
@@ -324,7 +335,8 @@ namespace Cordyceps.Tools.Unified
                 else if (level == GH_RuntimeMessageLevel.Warning) r.Warnings++;
                 else continue;
 
-                if (before.TryGetValue(obj.InstanceGuid, out var was) && was >= level) continue;
+                // By severity, not by number: a remark (255) before an error (20) is not "already a problem".
+                if (before.TryGetValue(obj.InstanceGuid, out var was) && MessageLevels.Severity((int)was) >= MessageLevels.Severity((int)level)) continue;
                 var message = a.RuntimeMessages(level).FirstOrDefault() ?? "";
                 if (message.Length > 60) message = message.Substring(0, 59) + "…";
                 r.NewProblems.Add($"{canvas.ExistingLabel(obj)} {(level == GH_RuntimeMessageLevel.Error ? "error" : "warning")}: {message}");

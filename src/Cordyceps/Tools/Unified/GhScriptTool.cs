@@ -15,7 +15,7 @@ namespace Cordyceps.Tools.Unified
     /// Unified script tool - script component operations (get, set, configure, info)
     /// </summary>
     [McpServerToolType]
-    public class GhScriptTool
+    public partial class GhScriptTool
     {
         private readonly GrasshopperContext _context;
 
@@ -42,7 +42,8 @@ namespace Cordyceps.Tools.Unified
                     Name = "set",
                     Description = "Set source code on a script component",
                     Required = new[] { "id", "code" },
-                    Example = "action='set', id='abc', code='print(x)'",
+                    Optional = new[] { "solve" },
+                    Example = "action='set', id='abc', code='print(x)' OR action='set', id='checker', code='...', solve=true",
                     Tips = new[] {
                         "Params matching by name keep their wires (LCS diffing)",
                         "Renamed/removed params lose connections — reported in lostConnections",
@@ -55,7 +56,24 @@ namespace Cordyceps.Tools.Unified
                         "verified=true means the running program was read back and matches what was written. verified=false adds sourceDiverged and runningSource — expected for C# SDK-mode scripts, whose RunScript signature Rhino rewrites as it builds",
                         "If the program could not be read there is no verified field at all, and verificationSkipped says why — never read an absent verified as a match",
                         "Code that fails to compile still reports success here — the write and the rebuild both succeeded. Build errors surface on the component; check gh_inspect(action='status', id=...) after setting code",
-                        "The compile happens inside this call rather than at the next solve, so the first script write of a session can take noticeably longer"
+                        "The compile happens inside this call rather than at the next solve, so the first script write of a session can take noticeably longer",
+                        "solve=true: solves once after writing and adds results (each output's count, branches and first 10 values, as gh_inspect(action='outputs') shows them), messages (errors, warnings and remarks, compile errors included) and solveMs. One call per round for a checking script instead of set + outputs",
+                        "solve=true doesn't solve inside a cluster editor or while the solver is off (solved=false and notSolved say why); a slow script makes the call slow, and a solve can't be interrupted"
+                    }
+                },
+                ["edit"] = new ActionInfo
+                {
+                    Name = "edit",
+                    Description = "Change part of a script: replace exact passages of its current source, then write it as 'set' does",
+                    Required = new[] { "id", "edits" },
+                    Optional = new[] { "solve" },
+                    Example = "action='edit', id='checker', edits='[{\"old\": \"tol = 0.01\", \"new\": \"tol = 0.001\"}]', solve=true",
+                    Tips = new[] {
+                        "Send only what changes: a few lines instead of the whole script. Use 'set' for a new script or a rewrite",
+                        "edits: a JSON list of {old, new}, applied in order. Each old must occur exactly once in the script as it stands when that edit applies; include a neighbouring line or two to make it unique. new = '' deletes",
+                        "If any edit fails, nothing changes and every problem is listed: not found (with the closest line and the lines around it as they now read, so the edit can be corrected without reading the script again) or found several times (with their lines)",
+                        "Line endings don't matter (Windows and Unix endings both match); the script keeps its own. If the exact text isn't found, spaces and tabs at the ends of lines are ignored (indentation is not), and notes names the lines",
+                        "The result is the same as 'set' (rebuilt, verified, lostConnections; solve=true adds results and messages), plus edited, editedLines, sourceLength and, when there is something to say (a match ignoring trailing spaces), notes. The source isn't echoed: no need to read it back"
                     }
                 },
                 ["configure"] = new ActionInfo
@@ -63,7 +81,7 @@ namespace Cordyceps.Tools.Unified
                     Name = "configure",
                     Description = "Configure script with inputs, outputs, and full source",
                     Required = new[] { "id" },
-                    Optional = new[] { "inputs", "outputs", "code" },
+                    Optional = new[] { "inputs", "outputs", "code", "solve" },
                     Example = "action='configure', id='abc', inputs='[{\"name\":\"x\",\"type\":\"double\"}]', code='...'",
                     Tips = new[] {
                         "inputs: [{name, type, access}]", "outputs: [{name, type}]", "types: int, double, bool, string, Point3d, etc.",
@@ -74,13 +92,15 @@ namespace Cordyceps.Tools.Unified
                         "A bare unified 'Script' component (no language picked) returns a languageWarning until code starts with a directive — add '#! python 3' or '// #! csharp'",
                         "When 'code' is provided the response includes codeSet (bool); if setting the source fails after params were applied, success is false, codeSet=false, and sourceError holds the reason — the params DID change",
                         "Components that expose their code as a visible input parameter can't be written directly — sourceError says so and the code is left unchanged",
-                        "When code is written the component is rebuilt from it and the result read back: rebuilt/rebuildSkipped and verified/runningSource mean exactly what they do for action='set'"
+                        "When code is written the component is rebuilt from it and the result read back: rebuilt/rebuildSkipped and verified/runningSource mean exactly what they do for action='set'",
+                        "solve=true solves once afterwards and adds results, messages and solveMs, as for action='set'",
+                        "To add or remove a port on a script you wrote, pass only inputs/outputs (no code), then change the lines that use it with action='edit': code here sends the whole script again. In C#, configure updates RunScript's parameters itself, so edit only the body"
                     }
                 },
                 ["info"] = new ActionInfo
                 {
                     Name = "info",
-                    Description = "Get detailed script info (source, params, errors)",
+                    Description = "Get detailed script info (params, errors) with the whole source. Read a script once: get and info both return all of it; for only its ports and wiring use gh_canvas(action='outline', id=...)",
                     Required = new[] { "id" },
                     Example = "action='info', id='abc-123'"
                 },
@@ -104,13 +124,17 @@ namespace Cordyceps.Tools.Unified
             _context = context;
         }
 
-        [McpServerTool, Description("Script operations. Actions: get|set|configure|info|help")]
+        [McpServerTool, Description("Script operations. Actions: get|set|edit|configure|info|help. To change part of a script, use edit with only the changed passages instead of sending the whole script again")]
         public string GhScript(
             [Description("Action to perform")] string action,
             [Description("Script component: GUID, 8+ char GUID prefix, gh_batch ref or unique nickname")] string id = null,
             [Description("Source code")] string code = null,
             [Description("JSON array of input definitions")] string inputs = null,
-            [Description("JSON array of output definitions")] string outputs = null)
+            [Description("JSON array of output definitions")] string outputs = null,
+            // Hyperceps: solve after set/configure and return the script's results and messages
+            [Description("For set/edit/configure: solve once and return the script's results (outputs' counts and values) and messages (errors, warnings, remarks)")] bool solve = false,
+            // Hyperceps: change part of a script without sending all of it
+            [Description("For edit: JSON list of {\"old\": exact text in the script, \"new\": its replacement}, applied in order; each old must occur exactly once")] string edits = null)
         {
             if (string.Equals(action, "help", StringComparison.OrdinalIgnoreCase))
                 return UnifiedToolHelpers.GenerateHelp(ToolInfo);
@@ -119,7 +143,9 @@ namespace Cordyceps.Tools.Unified
                 ("id", id),
                 ("code", code),
                 ("inputs", inputs),
-                ("outputs", outputs)
+                ("outputs", outputs),
+                ("solve", solve ? (object)true : null),
+                ("edits", edits)
             );
 
             var validationError = UnifiedToolHelpers.ValidateAction(ToolInfo, action, providedParams);
@@ -129,8 +155,9 @@ namespace Cordyceps.Tools.Unified
             return action.ToLowerInvariant() switch
             {
                 "get" => ActionGet(id),
-                "set" => ActionSet(id, code),
-                "configure" => ActionConfigure(id, inputs, outputs, code),
+                "set" => ActionSet(id, code, solve),
+                "edit" => ActionEdit(id, edits, solve),
+                "configure" => ActionConfigure(id, inputs, outputs, code, solve),
                 "info" => ActionInfo(id),
                 _ => JsonConvert.SerializeObject(new { success = false, error = $"Unknown action: {action}" })
             };
@@ -178,7 +205,7 @@ namespace Cordyceps.Tools.Unified
             });
         }
 
-        private string ActionSet(string id, string code)
+        private string ActionSet(string id, string code, bool solve = false)
         {
             return _context.ExecuteOnUiThread(() =>
             {
@@ -266,6 +293,10 @@ namespace Cordyceps.Tools.Unified
                             + "updating targetParam/sourceParam if params were renamed.";
                     }
 
+                    // Hyperceps: solve once and report what the script produced (GhScriptTool.Solve.cs).
+                    if (solve)
+                        AddSolveResults(response, component);
+
                     return JsonConvert.SerializeObject(response);
                 }
                 catch (Exception ex)
@@ -280,7 +311,7 @@ namespace Cordyceps.Tools.Unified
             });
         }
 
-        private string ActionConfigure(string id, string inputs, string outputs, string code)
+        private string ActionConfigure(string id, string inputs, string outputs, string code, bool solve = false)
         {
             return _context.ExecuteOnUiThread(() =>
             {
@@ -448,6 +479,10 @@ namespace Cordyceps.Tools.Unified
                         + "To restore, pass the lostConnections array as 'connections' to gh_wire(action='connect'), "
                         + "updating targetParam/sourceParam if params were renamed.";
                 }
+
+                // Hyperceps: solve once and report what the script produced (GhScriptTool.Solve.cs).
+                if (solve && configured)
+                    AddSolveResults(configureResponse, component);
 
                 return JsonConvert.SerializeObject(configureResponse);
             });

@@ -15,7 +15,7 @@ namespace Cordyceps.Tests
     public class CanvasOutlineTests
     {
         /// <summary>Builds a small canvas the way the Grasshopper adapter would.</summary>
-        private sealed class Canvas
+        internal sealed class Canvas
         {
             private readonly List<OutlineNode> _nodes = new List<OutlineNode>();
             private readonly List<OutlineGroup> _groups = new List<OutlineGroup>();
@@ -75,7 +75,7 @@ namespace Cordyceps.Tests
             public OutlineModel Build() => new OutlineModel("test.gh", _nodes, _groups);
         }
 
-        private static List<string> Lines(JToken t) => t?.Values<string>().ToList() ?? new List<string>();
+        internal static List<string> Lines(JToken t) => t?.Values<string>().ToList() ?? new List<string>();
 
         // ---- overview -------------------------------------------------------------------------------
 
@@ -172,8 +172,8 @@ namespace Cordyceps.Tests
         public void Group_ListsUpstreamFirst_WithPortsSettingsAndOutsideSources()
         {
             var c = new Canvas();
-            var chords = c.Node("Curve", "CHORDS", OutlineKind.Parameter, x: -500);
-            c.Group("OTHER", -500, chords);
+            var edges = c.Node("Curve", "EDGES", OutlineKind.Parameter, x: -500);
+            c.Group("OTHER", -500, edges);
 
             // Positions deliberately against the flow: the consumer is leftmost.
             var item = c.Node("List Item", x: 0);
@@ -183,7 +183,7 @@ namespace Cordyceps.Tests
             c.Input(split, "C").Stored = ",";
             c.Wire(split, "R", item, "i");
             c.Input(item, "i").Modifiers = "graft";
-            c.Wire(chords, null, item, "L", items: 8);
+            c.Wire(edges, null, item, "L", items: 8);
             var after = c.Node("Line", x: 900);
             c.Wire(item, "i", after, "A", items: 4);
             var block = c.Group("BLOCK", 0, item, split, panel);
@@ -193,12 +193,12 @@ namespace Cordyceps.Tests
 
             Assert.Equal("BLOCK", (string)g["group"]);
             Assert.Equal("3 objects · #DCEDC8", (string)g["summary"]);
-            Assert.Equal("← CHORDS [OTHER]", (string)g["in"]);
+            Assert.Equal("← EDGES [OTHER]", (string)g["in"]);
             var lines = Lines(g["objects"]);
             Assert.Equal(3, lines.Count);
             Assert.Equal($"{panel.ShortId} Panel \"INDEX\" = \"0 | 2\" (2 lines)", lines[0]);
             Assert.Equal($"{split.ShortId} Text Split · T ← INDEX · C = ,", lines[1]);
-            Assert.Equal($"{item.ShortId} List Item · i ← {split.ShortId}.R (graft) · L ← CHORDS [OTHER]", lines[2]);
+            Assert.Equal($"{item.ShortId} List Item · i ← {split.ShortId}.R (graft) · L ← EDGES [OTHER]", lines[2]);
             Assert.Equal($"{item.ShortId}.i (4) → {after.ShortId} Line", (string)g["out"]);
         }
 
@@ -230,8 +230,8 @@ namespace Cordyceps.Tests
             inner.Description = "Two inputs";
             var outer = c.Group("OUTER", 0, inner, own);
             outer.IsThallus = true;
-            outer.Description = "Bracing between chords.\nEdges use nodes.";
-            outer.Properties.Add(new KeyValuePair<string, string>("purpose", "bracing"));
+            outer.Description = "Panels between curves.\nEdges use nodes.";
+            outer.Properties.Add(new KeyValuePair<string, string>("purpose", "panels"));
             outer.ToLichen = true;
             var model = c.Build();
 
@@ -239,14 +239,14 @@ namespace Cordyceps.Tests
             Assert.Equal("3 objects · 2 groups (2 Thalli) · 0 errors · 0 warnings", (string)overview["summary"]);
             var line = Lines(overview["groups"]).Single();
             Assert.StartsWith("THALLUS OUTER · #DCEDC8 · 3 objects", line);
-            Assert.Contains("author's description: \"Bracing between chords. / Edges use nodes.\"", line);
+            Assert.Contains("author's description: \"Panels between curves. / Edges use nodes.\"", line);
             Assert.Contains("T → Lichen", line);
             Assert.Contains("contains: THALLUS INNER (2 objects)", line);
 
             var g = (JObject)CanvasOutline.Groups(model, new[] { outer })["groups"][0];
             Assert.Equal("THALLUS OUTER", (string)g["group"]);
-            Assert.Equal("Bracing between chords.\nEdges use nodes.", (string)g["authorDescription"]);
-            Assert.Equal("purpose = bracing", (string)g["authorProperties"]);
+            Assert.Equal("Panels between curves.\nEdges use nodes.", (string)g["authorDescription"]);
+            Assert.Equal("purpose = panels", (string)g["authorProperties"]);
             var lines = Lines(g["objects"]);
             Assert.Equal(2, lines.Count);
             Assert.Equal("THALLUS INNER · 2 objects · author's description: \"Two inputs\" · open with group='INNER'", lines[0]);
@@ -318,24 +318,24 @@ namespace Cordyceps.Tests
         public void FindGroups_ExactThenCaseThenUniqueStart_NeverALooseGuess()
         {
             var c = new Canvas();
-            var chords = c.Group("TOP CHORDS", 0);
-            var bracing = c.Group("TOP BRACING", 0);
+            var curves = c.Group("UPPER CURVES", 0);
+            var diagonals = c.Group("UPPER DIAGONALS", 0);
             var gridLines = c.Group("GRID LINES (sorted W→E)", 0);
             var model = c.Build();
 
             var errors = new List<string>();
-            Assert.Equal(new[] { bracing }, CanvasOutline.FindGroups(model, new[] { "TOP BRACING" }, errors));
-            Assert.Equal(new[] { bracing }, CanvasOutline.FindGroups(model, new[] { "top bracing" }, errors));
+            Assert.Equal(new[] { diagonals }, CanvasOutline.FindGroups(model, new[] { "UPPER DIAGONALS" }, errors));
+            Assert.Equal(new[] { diagonals }, CanvasOutline.FindGroups(model, new[] { "upper diagonals" }, errors));
             Assert.Equal(new[] { gridLines }, CanvasOutline.FindGroups(model, new[] { "GRID LINES" }, errors));
-            Assert.Equal(new[] { chords }, CanvasOutline.FindGroups(model, new[] { chords.ShortId }, errors));
+            Assert.Equal(new[] { curves }, CanvasOutline.FindGroups(model, new[] { curves.ShortId }, errors));
             Assert.Empty(errors);
 
-            Assert.Empty(CanvasOutline.FindGroups(model, new[] { "TOP" }, errors));
+            Assert.Empty(CanvasOutline.FindGroups(model, new[] { "UPPER" }, errors));
             Assert.Contains("matches 2 groups", errors.Single());
 
             errors.Clear();
-            Assert.Empty(CanvasOutline.FindGroups(model, new[] { "TOP BRACNG" }, errors));
-            Assert.Contains("Did you mean 'TOP BRACING'?", errors.Single());
+            Assert.Empty(CanvasOutline.FindGroups(model, new[] { "UPPER DIAGONLS" }, errors));
+            Assert.Contains("Did you mean 'UPPER DIAGONALS'?", errors.Single());
         }
 
         [Fact]

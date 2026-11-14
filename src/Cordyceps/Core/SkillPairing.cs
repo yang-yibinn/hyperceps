@@ -5,7 +5,7 @@ namespace Cordyceps.Core
     /// <summary>
     /// Hyperceps is two parts, the Grasshopper plugin and the Claude skill <c>hyperceps</c>, released
     /// together under one version number. The connection note opens with the plugin's version and asks
-    /// the agent to load the skill, or, when it isn't installed, to tell the user once how to get it.
+    /// the agent to load the skill, or, when it isn't installed, to read the plugin's own copy of it.
     /// The skill names the version it is for (<see cref="SkillVersionLine"/>); a unit test keeps that
     /// line and the plugin's version the same.
     /// </summary>
@@ -27,18 +27,21 @@ namespace Cordyceps.Core
             return plus > 0 ? v.Substring(0, plus) : v;
         }
 
-        /// <summary>The first lines of the connection note: name and version, then the skill.</summary>
+        /// <summary>
+        /// The first lines of the connection note: name and version, then the guide. Since 1.1 the plugin
+        /// serves the skill itself (<see cref="SkillText"/>), so an app without the installed skill reads it
+        /// with <see cref="SkillText.Call"/> and nobody has to install anything.
+        /// </summary>
         public static string Header(string version)
         {
             var v = ReleaseVersion(version);
             return $"Hyperceps {v}: MCP control of Grasshopper (parametric 3D design). Built from Cordyceps by Brooks Talley." + Environment.NewLine
                 + Environment.NewLine
-                + $"SKILL: Hyperceps is made to be used with its Claude skill \"{SkillName}\" (same version, {v})." + Environment.NewLine
-                + $"- If your app supports skills and \"{SkillName}\" isn't loaded yet, load it now, before working on the canvas." + Environment.NewLine
-                + "- If it isn't installed, tell the user once, then carry on: \"Hyperceps works best with its Claude skill: download" + Environment.NewLine
-                + $"  {SkillZip} from {ReleasesUrl} and copy the {SkillName} folder into ~/.claude/skills (Claude Code)," + Environment.NewLine
-                + "  or upload the zip under Skills in Claude's settings.\"" + Environment.NewLine
-                + "- If the skill names a different version, tell the user to update the older part." + Environment.NewLine
+                + $"GUIDE FIRST: before working on the canvas, read the Hyperceps guide once (the \"{SkillName}\" skill, version {v}):" + Environment.NewLine
+                + $"- If your app lists a \"{SkillName}\" skill, load it." + Environment.NewLine
+                + $"- Otherwise call {SkillText.Call}: the plugin returns the same guide. Nothing to install." + Environment.NewLine
+                + $"- If a loaded skill names another version, call {SkillText.Call} instead and tell the user" + Environment.NewLine
+                + "  once that their installed skill doesn't match the plugin (update or remove it)." + Environment.NewLine
                 + Environment.NewLine;
         }
     }

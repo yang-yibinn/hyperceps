@@ -118,6 +118,19 @@ namespace Cordyceps.Tools.Unified
                         "limit: how many path groups to list per output (default 20)"
                     }
                 },
+                // Hyperceps: the plugin's own copy of the skill (GhInspectTool.Skill.cs)
+                ["skill"] = new ActionInfo
+                {
+                    Name = "skill",
+                    Description = "The Hyperceps guide: the hyperceps skill's text, served by the plugin, for apps without the skill installed",
+                    Example = "action='skill'",
+                    Tips = new[]
+                    {
+                        "Call it once, before working on the canvas, when your app has no 'hyperceps' skill loaded; the guide then stays in the conversation",
+                        "It is the same text as the released skill of this plugin's version, so it always matches the tools",
+                        "Answers without touching the document, so it works while Grasshopper is busy"
+                    }
+                },
                 ["help"] = new ActionInfo
                 {
                     Name = "help",
@@ -129,6 +142,7 @@ namespace Cordyceps.Tools.Unified
                 "Use 'tree' to check branch paths and counts after a change that affects data structure",
                 "Use 'status' to quickly identify errors and warnings",
                 "Use 'trace' to understand data flow through your definition",
+                "Use 'skill' for the Hyperceps guide when your app has no hyperceps skill installed",
                 "Use 'connection' when a call is slow or silent — it distinguishes a busy solver from a host blocked by a modal dialog"
             }
         };
@@ -138,7 +152,7 @@ namespace Cordyceps.Tools.Unified
             _context = context;
         }
 
-        [McpServerTool, Description("Inspection operations. Actions: connection|status|outputs|trace|disconnected|geometry|log|reports|categories|docs|tree|help")]
+        [McpServerTool, Description("Inspection operations. Actions: connection|status|outputs|trace|disconnected|geometry|log|reports|categories|docs|tree|skill|help")]
         public string GhInspect(
             [Description("Action to perform")] string action,
             [Description("Component: GUID, 8+ char GUID prefix, gh_batch ref or unique nickname. For tree: optionally 'obj.port', or a JSON list of them")] string id = null,
@@ -181,6 +195,7 @@ namespace Cordyceps.Tools.Unified
                 "categories" => ActionCategories(),
                 "docs" => ActionDocs(component),
                 "tree" => ActionTree(id, limit),
+                "skill" => ActionSkill(),
                 _ => JsonConvert.SerializeObject(new { success = false, error = $"Unknown action: {action}" })
             };
         }

@@ -51,7 +51,12 @@ namespace Cordyceps.Resources
             // Register static documentation resources from embedded markdown files
             RegisterEmbeddedResource("gh://docs/getting-started", "Knowledge.GettingStartedGuide.md",
                 "Getting Started with Grasshopper",
-                "Essential guide for AI agents - read this first! Covers key concepts, workflow, common mistakes, and tool overview");
+                "Short overview for AI agents: key concepts, workflow, common mistakes, and the tools. The full working method is gh://skill");
+
+            // Hyperceps: the skill's SKILL.md, embedded at build time (Core/SkillText); same text as gh_inspect(action='skill')
+            RegisterEmbeddedResource(Core.SkillText.ResourceUri, Core.SkillText.ResourceName,
+                "Hyperceps guide (the hyperceps skill)",
+                "How to work on a Grasshopper canvas through Hyperceps: read this before working on the canvas if your app has no hyperceps skill installed. Same version as the plugin");
 
             RegisterEmbeddedResource("gh://docs/data-trees", "Knowledge.DataTreesGuide.md",
                 "Grasshopper Data Trees Guide",

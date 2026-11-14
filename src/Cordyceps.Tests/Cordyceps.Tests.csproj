@@ -50,6 +50,10 @@
     <Compile Include="..\Cordyceps\Core\SnapshotStore.cs" Link="SnapshotStore.cs" />
     <Compile Include="..\Cordyceps\Core\SolverState.cs" Link="SolverState.cs" />
     <Compile Include="..\Cordyceps\Core\StatusEnvelope.cs" Link="StatusEnvelope.cs" />
+    <Compile Include="..\Cordyceps\Core\HostBusyGate.cs" Link="HostBusyGate.cs" />
+    <Compile Include="..\Cordyceps\Core\DialogCheck.cs" Link="DialogCheck.cs" />
+    <Compile Include="..\Cordyceps\Core\ScriptEdits.cs" Link="ScriptEdits.cs" />
+    <Compile Include="..\Cordyceps\Core\MessageLevels.cs" Link="MessageLevels.cs" />
   </ItemGroup>
 
   <!-- Hyperceps: the host-free parts of gh_batch, and the schema it publishes -->
@@ -61,7 +65,11 @@
     <Compile Include="..\Cordyceps\Core\Sweep\*.cs" LinkBase="Sweep" />
     <Compile Include="..\Cordyceps\Core\SkillPairing.cs" Link="SkillPairing.cs" />
     <Compile Include="..\Cordyceps\Core\SingleStepNudge.cs" Link="SingleStepNudge.cs" />
+    <Compile Include="..\Cordyceps\Core\SkillText.cs" Link="SkillText.cs" />
+    <Compile Include="..\Cordyceps\Core\ServerNote.cs" Link="ServerNote.cs" />
     <EmbeddedResource Include="..\Cordyceps\Tools\Batch\GhBatchSchema.json" LogicalName="GhBatchSchema.json" />
+    <!-- The skill, embedded as the plugin embeds it (same LogicalName), for SkillTextTests -->
+    <EmbeddedResource Include="..\..\skills\hyperceps\SKILL.md" LogicalName="Hyperceps.SKILL.md" />
   </ItemGroup>
 
 </Project>

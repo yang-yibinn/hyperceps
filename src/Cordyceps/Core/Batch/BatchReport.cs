@@ -35,6 +35,9 @@ namespace Cordyceps.Core.Batch
         public List<string> Hints { get; } = new List<string>();
         public List<RuntimeNote> Runtime { get; } = new List<RuntimeNote>();
 
+        /// <summary>options.watch: one line per output, read after the solve.</summary>
+        public List<string> Watch { get; } = new List<string>();
+
         /// <summary>ref → shortest unique GUID prefix, in creation order.</summary>
         public List<KeyValuePair<string, string>> Created { get; } = new List<KeyValuePair<string, string>>();
 
@@ -77,6 +80,7 @@ namespace Cordyceps.Core.Batch
 
             if (Ok || Changed) o["counts"] = Counts.ToJson();
             if (Solved.HasValue) o["solved"] = Solved.Value;
+            if (Watch.Count > 0) o["watch"] = new JArray(Watch.Select(w => Cut(w, MaxErrorLength)));
 
             o["errors"] = Capped(Errors, MaxErrors, MaxErrorLength, "errors");
             o["warnings"] = Capped(Warnings, MaxWarnings, MaxMessageLength, "warnings");

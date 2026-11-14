@@ -4,9 +4,9 @@ Guidance for Claude Code (claude.ai/code) when working in this repository.
 
 ## Hyperceps
 
-**Hyperceps** is a Grasshopper plugin plus a Claude skill (`skills/hyperceps`) that let an AI agent
-build and edit Grasshopper definitions in a few validated calls. It is built from Cordyceps by Brooks
-Talley (MIT) and developed by Yibin Yang at Adrian Smith + Gordon Gill Architecture (AS+GG). The
+**Hyperceps** is a Grasshopper plugin with a built-in guide for the agent (the Claude skill in
+`skills/hyperceps`) that lets an AI agent build and edit Grasshopper definitions in a few validated
+calls. It is built on top of Cordyceps by Brooks Talley (MIT) and developed by Yibin Yang at Adrian Smith + Gordon Gill Architecture (AS+GG). The
 design is in [`docs/design.md`](docs/design.md), the `gh_batch` contract in
 [`docs/gh-batch-schema.md`](docs/gh-batch-schema.md).
 
@@ -15,6 +15,8 @@ design is in [`docs/design.md`](docs/design.md), the `gh_batch` contract in
   `Cordyceps` on purpose (a smaller diff from Cordyceps, easier to bring in its fixes).
 - **Plugin and skill share one version number** (`<Version>` in `src/Cordyceps/Cordyceps.csproj` and the
   "This skill is for Hyperceps X.Y.Z" line in `skills/hyperceps/SKILL.md`); a unit test checks it.
+  SKILL.md is embedded in the plugin at build time and served by `gh_inspect(action='skill')` and
+  `gh://skill` (`Core/SkillText.cs`), so the two are always the same text.
 - **Keep existing tools' names, inputs and outputs unchanged.** Add new behaviour as new tools, new
   actions or optional inputs. Put new code in new files; keep edits to existing files small.
 - **Testing:** never on real project files. The live test script only runs on a scratch `.gh` file.
@@ -35,8 +37,9 @@ The project targets .NET 8.0 and Grasshopper for Rhino 8. Debug builds are block
 ## Architecture
 
 - **McpServer.cs:** HTTP MCP server (JSON-RPC). Discovers tools by reflection (`[McpServerToolType]`,
-  `[McpServerTool]`); `GetServerInstructions()` is the connection note every client receives (it opens
-  with the version and the skill block from `Core/SkillPairing.cs`).
+  `[McpServerTool]`). The connection note every client receives is `Core/ServerNote.cs` (it opens with
+  the version and the guide block from `Core/SkillPairing.cs`); Claude Code shows only its first 4,096
+  characters, so a unit test keeps it under 3,900.
 - **CordycepsComponent.cs:** the canvas component that starts and stops the server.
 - **Core/GrasshopperContext.cs:** all document access runs on the UI thread through
   `ExecuteOnUiThread()`.
@@ -60,7 +63,7 @@ Agents only know what the plugin and skill tell them. After any change, check an
 | What | Where |
 | --- | --- |
 | Tool help metadata | `ActionInfo` in the tool class |
-| Connection note | `McpServer.cs` → `GetServerInstructions()` |
+| Connection note | `Core/ServerNote.cs` (under 3,900 characters) and `Core/SkillPairing.cs` |
 | Guides served as MCP resources | `src/Cordyceps/Knowledge/*.md` (registered in `Resources/ResourceRegistry.cs`) |
 | Prompt templates | `Prompts/PromptRegistry.cs` |
 | Common errors | `Knowledge/CommonErrorsGuide.md` |

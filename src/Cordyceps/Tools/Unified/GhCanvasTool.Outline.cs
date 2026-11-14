@@ -47,11 +47,11 @@ namespace Cordyceps.Tools.Unified
                 JObject result;
                 if (groupNames != null)
                 {
+                    // Group names, plus 'network N' and 'ungrouped' (CanvasOutline.Regions).
                     var errors = new List<string>();
-                    var groups = CanvasOutline.FindGroups(model, groupNames, errors);
-                    if (errors.Count > 0)
+                    result = CanvasOutline.Open(model, groupNames, errors);
+                    if (errors.Count > 0 || result == null)
                         return ToolHelpers.ErrorResponse(string.Join("; ", errors));
-                    result = CanvasOutline.Groups(model, groups);
                 }
                 else if (hasId)
                 {
@@ -90,7 +90,7 @@ namespace Cordyceps.Tools.Unified
                 names = JArray.Parse(s).Select(t => t.Type == JTokenType.String ? t.Value<string>() : null).ToList();
                 if (names.Count == 0 || names.Any(string.IsNullOrWhiteSpace))
                 {
-                    error = "'group' as a list must hold group names, e.g. [\"POSTS\", \"TOP CHORDS\"]";
+                    error = "'group' as a list must hold group names, e.g. [\"POINTS\", \"UPPER CURVES\"]";
                     return false;
                 }
                 return true;
@@ -251,11 +251,16 @@ namespace Cordyceps.Tools.Unified
                 node.Outputs.Add(o);
             }
 
-            if (obj is IGH_ActiveObject active && active.RuntimeMessageLevel >= GH_RuntimeMessageLevel.Warning)
+            if (obj is IGH_ActiveObject active)
             {
+                // A remark's level number (255) is above an error's: compare by meaning, not number.
                 var level = active.RuntimeMessageLevel;
-                node.Level = level == GH_RuntimeMessageLevel.Error ? "error" : "warning";
-                node.Message = active.RuntimeMessages(level).FirstOrDefault() ?? "";
+                if (MessageLevels.IsProblem((int)level))
+                {
+                    node.Level = MessageLevels.Name((int)level);
+                    node.Message = active.RuntimeMessages(level).FirstOrDefault() ?? "";
+                }
+                node.Remark = MessageLevels.RemarkNote(active.RuntimeMessages(GH_RuntimeMessageLevel.Remark));
             }
             return node;
         }

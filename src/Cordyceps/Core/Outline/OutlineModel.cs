@@ -81,9 +81,12 @@ namespace Cordyceps.Core.Outline
         public List<OutlinePort> Inputs { get; } = new List<OutlinePort>();
         public List<OutlineOutput> Outputs { get; } = new List<OutlineOutput>();
 
-        /// <summary>"error", "warning" or null.</summary>
+        /// <summary>"error", "warning" or null. Remarks are not problems (see MessageLevels).</summary>
         public string Level { get; set; }
         public string Message { get; set; }
+
+        /// <summary>The component's remarks as one note ("remark: ... (+N more)"), or null.</summary>
+        public string Remark { get; set; }
 
         public float X { get; set; }
         public float Y { get; set; }

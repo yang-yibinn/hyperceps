@@ -41,11 +41,11 @@
     <!-- Specifies information for Assembly -->
     <!-- Hyperceps versions independently (based on Cordyceps 1.5.0, commit bfef0e1). The skill in
          skills/hyperceps carries the same number (Core/SkillPairing; a unit test checks it). -->
-    <Version>1.0.0</Version>
+    <Version>1.1.0</Version>
     <Title>Hyperceps</Title>
     <Company>Yibin Yang</Company>
     <Authors>Yibin Yang; based on Cordyceps by Brooks Talley</Authors>
-    <Description>Lets Claude build and edit Grasshopper definitions in a few validated calls: batch edits, a compact canvas outline, data-tree checks and slider sweeps. Use it with the Hyperceps skill for Claude. Based on Cordyceps by Brooks Talley</Description>
+    <Description>Lets Claude build and edit Grasshopper definitions in a few validated calls: batch edits, a compact canvas outline, data-tree checks, slider sweeps and partial script edits, with a built-in guide for the agent. Built on top of Cordyceps by Brooks Talley</Description>
     <!-- Embed build timestamp into assembly -->
     <SourceRevisionId>build$([System.DateTime]::UtcNow.ToString("yyyyMMddHHmmss"))</SourceRevisionId>
   </PropertyGroup>
@@ -91,6 +91,9 @@
     <EmbeddedResource Include="Knowledge\Prompts\PlanDefinition.md" />
     <!-- Hyperceps: gh_batch's published input schema -->
     <EmbeddedResource Include="Tools\Batch\GhBatchSchema.json" />
+    <!-- Hyperceps: the plugin's own copy of the skill, served by gh_inspect(action='skill') and
+         gh://skill (Core/SkillText). Taken from skills/hyperceps at build time: one source. -->
+    <EmbeddedResource Include="..\..\skills\hyperceps\SKILL.md" LogicalName="Hyperceps.SKILL.md" Link="Skill\SKILL.md" />
   </ItemGroup>
 
   <!-- Post-build: Copy .gha to releases folder for Grasshopper to load -->

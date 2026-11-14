@@ -34,6 +34,8 @@ namespace Cordyceps.Core.Batch
         public const int MaxOperationsCeiling = 5000;
         public const double DefaultTimeoutSeconds = 60;
         public const double TimeoutCeilingSeconds = 110;
+        /// <summary>Outputs read back after the solve; a component named without a port counts each output.</summary>
+        public const int MaxWatch = 10;
 
         public bool Atomic { get; set; } = true;
         public bool DryRun { get; set; }
@@ -41,6 +43,9 @@ namespace Cordyceps.Core.Batch
         public bool ReturnRuntimeMessages { get; set; } = true;
         public int MaxOperations { get; set; } = DefaultMaxOperations;
         public double TimeoutSeconds { get; set; } = DefaultTimeoutSeconds;
+
+        /// <summary>Outputs to report after the solve: an object, <c>obj.port</c>, or a ref from this batch.</summary>
+        public List<string> Watch { get; } = new List<string>();
     }
 
     /// <summary>What a component entry creates.</summary>

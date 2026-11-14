@@ -13,6 +13,10 @@ namespace Cordyceps.Core.Batch
         public Guid Guid { get; set; }
         public bool Deprecated { get; set; }
         public string Plugin { get; set; }
+        /// <summary>Ships with Grasshopper (a core library), as opposed to an installed plugin.</summary>
+        public bool BuiltIn { get; set; }
+        /// <summary>Known to come from an installed plugin (not built in, plugin named).</summary>
+        public bool FromPlugin => !BuiltIn && !string.IsNullOrEmpty(Plugin);
         public bool IsParam => string.Equals(Category, "Params", StringComparison.OrdinalIgnoreCase);
         public string PathText => $"{Category}/{SubCategory}/{Name}";
 
@@ -78,12 +82,18 @@ namespace Cordyceps.Core.Batch
         public bool UsedDeprecated { get; set; }
         /// <summary>Matches that exist outside the Params tab when <c>paramsOnly</c> filtered them out.</summary>
         public List<TypeCandidate> NonParamMatches { get; set; } = new List<TypeCandidate>();
+        /// <summary>
+        /// Plugin types with the same name, set aside because the name also belongs to exactly one
+        /// built-in type, which was used. Reported as a warning, so the choice is visible.
+        /// </summary>
+        public List<TypeCandidate> SetAside { get; set; } = new List<TypeCandidate>();
     }
 
     /// <summary>
     /// The spec's one rule for component names, never loose: exact name (ignoring case) among
     /// non-deprecated types; exactly one match is used; a deprecated type counts only when it is
-    /// the only match; anything else lists the candidates. <c>Category/Name</c> and
+    /// the only match; when the other matches all come from plugins, the one built-in type is
+    /// used and the plugin types are reported as set aside; anything else lists the candidates. <c>Category/Name</c> and
     /// <c>Category/Subcategory/Name</c> narrow the search; a GUID names one type directly.
     /// </summary>
     public static class TypeNameRule
@@ -143,6 +153,19 @@ namespace Cordyceps.Core.Batch
             }
             if (live.Count > 1)
             {
+                // Hyperceps: a name shared by one built-in type and only plugin types (Offset Curve
+                // in Grasshopper and in Pufferfish) means the built-in one; agents almost always
+                // do, and the warning names the plugin types. Two built-ins, or a type of unknown
+                // origin, stay ambiguous.
+                var builtIn = live.Where(c => c.BuiltIn).ToList();
+                if (builtIn.Count == 1 && live.All(c => c.BuiltIn || c.FromPlugin))
+                {
+                    result.Kind = TypeResolutionKind.Resolved;
+                    result.Match = builtIn[0];
+                    result.SetAside = live.Where(c => c != builtIn[0]).ToList();
+                    return result;
+                }
+
                 result.Kind = TypeResolutionKind.Ambiguous;
                 result.Candidates = live;
                 return result;

@@ -64,7 +64,7 @@ namespace Cordyceps.Tools.Unified
                     // catch turns that into an error response).
                     try
                     {
-                        bitmap.Save(actualPath, format);
+                        ImageFiles.Save(bitmap, actualPath, format); // Hyperceps: long paths
                         var result = new { success = true, filePath = actualPath, width = bitmap.Width, height = bitmap.Height, hint = "Use Read tool to view image" };
                         return JsonConvert.SerializeObject(result);
                     }
@@ -142,7 +142,7 @@ namespace Cordyceps.Tools.Unified
                     // catch turns that into an error response).
                     try
                     {
-                        bitmap.Save(actualPath, format);
+                        ImageFiles.Save(bitmap, actualPath, format); // Hyperceps: long paths
                         var result = new
                         {
                             success = true,
@@ -196,7 +196,7 @@ namespace Cordyceps.Tools.Unified
                     // catch turns that into an error response).
                     try
                     {
-                        bitmap.Save(actualPath, format);
+                        ImageFiles.Save(bitmap, actualPath, format); // Hyperceps: long paths
                         var result = new
                         {
                             success = true,

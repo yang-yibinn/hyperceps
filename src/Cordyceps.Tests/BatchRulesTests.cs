@@ -150,6 +150,49 @@ namespace Cordyceps.Tests
         }
 
         [Fact]
+        public void Resolve_BuiltInWinsOverPluginNamesakes_AndSetsThemAside()
+        {
+            var builtIn = Guid.NewGuid();
+            var catalog = new TypeCatalog(new[]
+            {
+                new TypeCandidate { Name = "Offset Curve", Category = "Curve", SubCategory = "Util", Guid = builtIn, Plugin = "Grasshopper", BuiltIn = true },
+                new TypeCandidate { Name = "Offset Curve", Category = "Pufferfish", SubCategory = "Curve", Guid = Guid.NewGuid(), Plugin = "Pufferfish" }
+            });
+
+            var r = TypeNameRule.Resolve("Offset Curve", catalog, false);
+            Assert.Equal(TypeResolutionKind.Resolved, r.Kind);
+            Assert.Equal(builtIn, r.Match.Guid);
+            Assert.Equal("Pufferfish", Assert.Single(r.SetAside).Plugin);
+
+            var plugin = TypeNameRule.Resolve("Pufferfish/Offset Curve", catalog, false);
+            Assert.Equal(TypeResolutionKind.Resolved, plugin.Kind);
+            Assert.Equal("Pufferfish", plugin.Match.Plugin);
+            Assert.Empty(plugin.SetAside);
+        }
+
+        [Fact]
+        public void Resolve_BuiltInWins_OnlyWhenEveryOtherMatchIsKnownToBeAPlugin()
+        {
+            TypeCandidate T(string category, bool builtIn, string plugin) =>
+                new TypeCandidate { Name = "Shape", Category = category, SubCategory = "X", Guid = Guid.NewGuid(), BuiltIn = builtIn, Plugin = plugin };
+
+            // Two built-ins (like Line the component and Line the parameter): still ambiguous.
+            Assert.Equal(TypeResolutionKind.Ambiguous, TypeNameRule.Resolve("Shape",
+                new TypeCatalog(new[] { T("Curve", true, "Grasshopper"), T("Params", true, "Grasshopper"), T("Puff", false, "Puff") }), false).Kind);
+            // A match of unknown origin: still ambiguous.
+            Assert.Equal(TypeResolutionKind.Ambiguous, TypeNameRule.Resolve("Shape",
+                new TypeCatalog(new[] { T("Curve", true, "Grasshopper"), T("Odd", false, null) }), false).Kind);
+            // Two plugins, no built-in: still ambiguous.
+            Assert.Equal(TypeResolutionKind.Ambiguous, TypeNameRule.Resolve("Shape",
+                new TypeCatalog(new[] { T("PluginA", false, "A"), T("PluginB", false, "B") }), false).Kind);
+            // One built-in, two plugins: the built-in, both plugins set aside.
+            var r = TypeNameRule.Resolve("Shape",
+                new TypeCatalog(new[] { T("Curve", true, "Grasshopper"), T("PluginA", false, "A"), T("PluginB", false, "B") }), false);
+            Assert.Equal(TypeResolutionKind.Resolved, r.Kind);
+            Assert.Equal(2, r.SetAside.Count);
+        }
+
+        [Fact]
         public void Resolve_DeprecatedIgnoredWhenACurrentOneExists()
         {
             var r = TypeNameRule.Resolve("Addition", Catalog(), false);
@@ -259,7 +302,7 @@ namespace Cordyceps.Tests
         [Theory]
         [InlineData("split", true)]
         [InlineData("merge_1", true)]
-        [InlineData("top-chords", true)]
+        [InlineData("upper-curves", true)]
         [InlineData("a.b", false)]
         [InlineData("a b", false)]
         [InlineData("", false)]
@@ -405,6 +448,19 @@ namespace Cordyceps.Tests
             Assert.Equal("(+30 more errors)", (string)o["errors"].Last);
             Assert.Equal(BatchReport.MaxMessageLength, ((string)o["warnings"][0]).Length);
             Assert.Equal(BatchReport.MaxRuntime + 1, ((JArray)o["runtime"]).Count);
+        }
+
+        [Fact]
+        public void ToJson_WatchOnlyWhenAsked()
+        {
+            var r = new BatchReport { Changed = true, Solved = true };
+            Assert.Null(JObject.Parse(r.ToJson())["watch"]);
+
+            r.Watch.Add("checker.report 1 [\"lines 166\"]");
+            r.Watch.Add(new string('x', 600));
+            var watch = (JArray)JObject.Parse(r.ToJson())["watch"];
+            Assert.Equal("checker.report 1 [\"lines 166\"]", (string)watch[0]);
+            Assert.Equal(BatchReport.MaxErrorLength, ((string)watch[1]).Length);
         }
 
         [Fact]

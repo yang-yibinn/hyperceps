@@ -110,7 +110,7 @@ namespace Cordyceps.Tools.Unified
                 tree[kv.Key] = kv.Value;
 
             // An error or warning on the object usually explains an empty or odd tree.
-            if (owner != null && owner.RuntimeMessageLevel >= GH_RuntimeMessageLevel.Warning)
+            if (owner != null && MessageLevels.IsProblem((int)owner.RuntimeMessageLevel))
             {
                 var level = owner.RuntimeMessageLevel;
                 var first = owner.RuntimeMessages(level).FirstOrDefault();

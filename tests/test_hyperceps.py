@@ -352,24 +352,24 @@ async def modifiers(gh):
 @check("insert", "insert puts a component into an existing wire; inserting on a wire that doesn't exist is an error")
 async def insert(gh):
     await gh.clear()
-    r = await gh.batch(components=[{"ref": "posts", "panel": "1\n2\n3\n4", "nickname": "POSTS"}, {"ref": "out", "param": "Number", "nickname": "POST OUT"}],
-                       wires=[["POSTS", "POST OUT"]])
+    r = await gh.batch(components=[{"ref": "points", "panel": "1\n2\n3\n4", "nickname": "POINTS"}, {"ref": "out", "param": "Number", "nickname": "POINT OUT"}],
+                       wires=[["POINTS", "POINT OUT"]])
     expect(r["ok"], "setup failed", r)
     r = await gh.batch(
         components=[{"ref": "cull", "type": "Cull Pattern"}, {"ref": "pat", "panel": "true\nfalse", "nickname": "SKIP EVERY OTHER"}],
-        insert=[{"ref": "cull", "on": ["POSTS.0", "POST OUT.0"], "in": "L", "out": "L"}],
+        insert=[{"ref": "cull", "on": ["POINTS.0", "POINT OUT.0"], "in": "L", "out": "L"}],
         wires=[["pat.0", "cull.P"]],
     )
     expect(r["ok"] and r["counts"]["inserts"] == 1, "insert failed", r)
     wires = (await gh.call("gh_wire", action="list"))["connections"]
-    posts, out, cull = (await gh.by_nickname("POSTS"))["id"], (await gh.by_nickname("POST OUT"))["id"], (await gh.by_prefix(r["created"]["cull"]))["id"]
+    points, out, cull = (await gh.by_nickname("POINTS"))["id"], (await gh.by_nickname("POINT OUT"))["id"], (await gh.by_prefix(r["created"]["cull"]))["id"]
     pairs = {(w["source"]["componentId"], w["target"]["componentId"]) for w in wires}
-    expect((posts, out) not in pairs, "the original wire should be gone")
-    expect((posts, cull) in pairs and (cull, out) in pairs, "POSTS -> cull -> POST OUT expected", wires)
+    expect((points, out) not in pairs, "the original wire should be gone")
+    expect((points, cull) in pairs and (cull, out) in pairs, "POINTS -> cull -> POINT OUT expected", wires)
     values = (await gh.outputs(out))[0]["preview"]
-    expect([float(v) for v in values] == [1.0, 3.0], "POST OUT should get every other post", values)
+    expect([float(v) for v in values] == [1.0, 3.0], "POINT OUT should get every other point", values)
 
-    r = await gh.batch(components=[{"ref": "cull2", "type": "Cull Pattern"}], insert=[{"ref": "cull2", "on": ["POSTS.0", "POST OUT.0"]}])
+    r = await gh.batch(components=[{"ref": "cull2", "type": "Cull Pattern"}], insert=[{"ref": "cull2", "on": ["POINTS.0", "POINT OUT.0"]}])
     expect(not r["ok"] and not r["changed"] and "no wire" in " ".join(r["errors"]), "inserting on a missing wire is an error", r)
 
 
@@ -637,7 +637,7 @@ async def tree(gh):
     expect(len(json.dumps(res)) < 2000, "tree results should be compact")
 
 
-@check("outline", "outline reads the canvas in one call: groups and what crosses their borders, a group's wiring, what is around one object, a canvas without groups")
+@check("outline", "outline reads the canvas in one call: groups and what crosses their borders, a group's wiring, the objects outside groups, what is around one object, a canvas without groups and one of its networks")
 async def outline(gh):
     await gh.clear()
     r = await gh.batch(
@@ -671,6 +671,7 @@ async def outline(gh):
            "O MATHS should say what flows in", lines[1])
     expect("out: " in lines[0] and "O COUNT (1) → O MATHS" in lines[0], "O INPUTS should say what flows out, with item counts", lines[0])
     expect("O LOOSE" in ov.get("ungrouped", ""), "the loose panel should be in 'ungrouped'", ov)
+    expect("group='ungrouped'" in ov.get("next", ""), "the hint should name group='ungrouped' when objects sit outside groups", ov)
     expect(any("Construct Point" in p and "error" in p for p in ov.get("problems", [])), "the failing Construct Point should be in 'problems'", ov)
     expect(len(json.dumps(ov)) < 2500, f"the overview should be short ({len(json.dumps(ov))} chars)")
 
@@ -690,6 +691,11 @@ async def outline(gh):
     expect(two["success"] and [g["group"] for g in two["groups"]] == ["O INPUTS", "O INNER"], "a JSON list of groups", two)
     vague = await gh.call("gh_canvas", action="outline", group="O")
     expect(not vague["success"] and "matches 3 groups" in vague["error"], "a name matching several groups is an error", vague)
+    loose = await gh.call("gh_canvas", action="outline", group="ungrouped")
+    expect(loose["success"] and loose["groups"][0]["group"] == "ungrouped"
+           and loose["groups"][0]["summary"].startswith("1 object · outside any group")
+           and any('"O LOOSE"' in l for l in loose["groups"][0]["objects"]),
+           "group='ungrouped' should list the loose panel", loose)
 
     around = await gh.call("gh_canvas", action="outline", id="O RESULT", depth=1)
     expect(around["success"] and any(l.startswith("* ") and '"O RESULT"' in l for l in around["objects"]),
@@ -715,6 +721,21 @@ async def outline(gh):
     expect("inputs: N COUNT = 5 (1..20)" in networks[0] and "ends: N END (5)" in networks[0],
            "the network should name its input and its end", networks)
     expect("N NOTE" in ov.get("unconnected", ""), "the lone panel should be 'unconnected'", ov)
+    expect(ov.get("next", "").startswith("group='network'"), "the hint should name group='network'", ov)
+
+    # The whole network in one call, upstream first, in the group view's format.
+    net = await gh.call("gh_canvas", action="outline", group="network")
+    expect(net["success"], "group='network' failed", net)
+    g = net["groups"][0]
+    objs = g["objects"]
+    expect(g["group"] == "network" and g["summary"].startswith("3 objects · the only network") and len(objs) == 3,
+           "the network view should list its 3 objects", net)
+    expect('"N COUNT"' in objs[0] and " Series" in objs[1] and "C ← N COUNT" in objs[1] and '"N END"' in objs[2],
+           "upstream first: N COUNT, Series (fed by N COUNT), N END", objs)
+    same = await gh.call("gh_canvas", action="outline", group="network 1")
+    expect(same["success"] and same["groups"][0]["objects"] == objs, "'network 1' should open the only network too", same)
+    missing = await gh.call("gh_canvas", action="outline", group="network 2")
+    expect(not missing["success"] and "group='network'" in missing["error"], "'network 2' should say there is one network", missing)
 
 
 @check("sweep", "sweep moves a slider, value list or toggle through values, reports each, and always puts it back")
@@ -772,6 +793,159 @@ async def sweep(gh):
     expect(len(json.dumps(res)) < 1500, "sweep results should be short")
 
 
+@check("script", "gh_script set/configure with solve=true solve once and return the script's results and messages (remarks too); without solve nothing changes; remarks aren't counted as warnings")
+async def script(gh):
+    await gh.clear()
+    r = await gh.batch(components=[{"ref": "sc", "type": "Python 3 Script"}])
+    expect(r["ok"], "setup failed", r)
+
+    def result(res, name):
+        found = [x for x in res.get("results", []) if x["name"] == name]
+        expect(len(found) == 1, f"results should hold output '{name}'", res)
+        return found[0]
+
+    res = await gh.call("gh_script", action="configure", id="sc", inputs="[]", outputs=json.dumps([{"name": "a"}]),
+                        code="#! python 3\na = 21 * 2", solve=True)
+    expect(res["success"] and res.get("solved") is True and "solveMs" in res, "configure with solve=true should solve", res)
+    a = result(res, "a")
+    expect(a["count"] == 1 and a["preview"] == ["42"], "the script's output should come back in results", a)
+    expect(res.get("messages") == [], "a script that runs cleanly has no messages", res)
+
+    res = await gh.call("gh_script", action="set", id="sc", code="#! python 3\na = 1 / 0", solve=True)
+    expect(res["success"] and res.get("solved") is True, "set with solve=true should solve", res)
+    expect(any(m["level"] == "error" for m in res.get("messages", [])), "the script's error should be in messages", res)
+
+    res = await gh.call("gh_script", action="set", id="sc", code="#! python 3\na = 5")
+    expect(res["success"] and "results" not in res and "solved" not in res, "without solve, set answers as before", res)
+
+    await gh.call("gh_document", action="solver", enabled="false")
+    try:
+        res = await gh.call("gh_script", action="set", id="sc", code="#! python 3\na = 6", solve=True)
+        expect(res["success"] and res.get("solved") is False and "solver is off" in res.get("notSolved", ""),
+               "with the solver off, the code is written but not solved", res)
+        expect(not (await gh.call("gh_document", action="info"))["solverEnabled"], "the solver should stay off")
+    finally:
+        await gh.call("gh_document", action="solver", enabled="true")
+
+    res = await gh.call("gh_script", action="set", id="sc", code="#! python 3\na = 7", solve=True)
+    expect(result(res, "a")["preview"] == ["7"], "after turning the solver back on, set with solve=true shows the new value", res)
+
+    # A script's remarks come back with its results, and on their own they aren't counted as warnings
+    # (Grasshopper numbers a remark 255, above an error).
+    r = await gh.batch(components=[{"ref": "rm", "type": "C# Script", "nickname": "REMARKS"}])
+    expect(r.get("ok"), "setup of the remark script failed", r)
+    remark_code = ("// Grasshopper Script Instance\n#region Usings\nusing System;\nusing Rhino;\nusing Grasshopper;\n"
+                   "using Grasshopper.Kernel;\n#endregion\n\npublic class Script_Instance : GH_ScriptInstance\n{\n"
+                   "    private void RunScript(ref object a, ref object levels)\n    {\n"
+                   "        Component.AddRuntimeMessage(GH_RuntimeMessageLevel.Remark, \"remark one\");\n"
+                   "        Component.AddRuntimeMessage(GH_RuntimeMessageLevel.Remark, \"remark two\");\n"
+                   "        a = 1;\n"
+                   "        levels = string.Format(\"{0} {1} {2} {3}\", (int)GH_RuntimeMessageLevel.Blank, (int)GH_RuntimeMessageLevel.Warning,\n"
+                   "            (int)GH_RuntimeMessageLevel.Error, (int)GH_RuntimeMessageLevel.Remark);\n    }\n}")
+    res = await gh.call("gh_script", action="configure", id="REMARKS", inputs="[]",
+                        outputs=json.dumps([{"name": "a"}, {"name": "levels"}]), code=remark_code, solve=True)
+    expect(res.get("success") and {"level": "remark", "text": "remark one"} in res.get("messages", []),
+           "solve=true should return the script's remarks", res)
+    # Core/MessageLevels hard-codes Grasshopper's numbers (the unit tests have no Grasshopper): check them here.
+    expect(result(res, "levels")["preview"] == ["0 10 20 255"],
+           "Grasshopper's message level numbers (Blank, Warning, Error, Remark) should be the ones Core/MessageLevels uses", res)
+    out = await gh.call("gh_canvas", action="outline")
+    expect(out.get("summary", "").endswith("0 errors · 0 warnings") and not out.get("problems"),
+           "remarks alone are not counted or listed as warnings", out)
+    near = await gh.call("gh_canvas", action="outline", id="REMARKS", depth=0)
+    expect(any("remark: remark one (+1 more)" in line for line in near.get("objects", [])),
+           "outline shows a component's remarks on its line", near)
+
+
+@check("edit", "gh_script edit replaces only the passages sent, across line endings, solves with solve=true, and changes nothing when an edit doesn't match once")
+async def edit(gh):
+    await gh.clear()
+    r = await gh.batch(components=[{"ref": "ed", "type": "Python 3 Script", "nickname": "EDITED"}])
+    expect(r["ok"], "setup failed", r)
+    res = await gh.call("gh_script", action="configure", id="EDITED", inputs="[]", outputs=json.dumps([{"name": "report"}]),
+                        code="#! python 3\ntol = 0.01\nscale = 2\nreport = 'tol %s scale %s' % (tol, scale)", solve=True)
+    expect(res["success"], "configuring the script failed", res)
+
+    def report(res):
+        found = [x for x in res.get("results", []) if x["name"] == "report"]
+        return found[0]["preview"] if found else None
+
+    res = await gh.call("gh_script", action="edit", id="EDITED", solve=True,
+                        edits=json.dumps([{"old": "tol = 0.01\nscale = 2", "new": "tol = 0.5\nscale = 3"}]))
+    expect(res["success"] and res.get("edited") == 1 and res.get("solved") is True, "a two-line edit should apply and solve", res)
+    expect(report(res) == ["tol 0.5 scale 3"], "the script should run the edited code", res)
+    expect("source" not in res and isinstance(res.get("editedLines"), list), "edit reports the lines, not the source", res)
+
+    before = (await gh.call("gh_script", action="get", id="EDITED"))["source"]
+    missing = await gh.call("gh_script", action="edit", id="EDITED", edits=json.dumps([{"old": "tol = 0.9", "new": "tol = 1"}]))
+    expect(not missing["success"] and "isn't in the script" in missing["error"] and "Nothing was changed" in missing["error"],
+           "an edit whose text isn't in the script is refused", missing)
+    expect("now read:" in missing["error"] and "2: tol = 0.5" in missing["error"],
+           "a refused edit shows the lines around the closest match, so the script needn't be read again", missing)
+    twice = await gh.call("gh_script", action="edit", id="EDITED", edits=json.dumps([{"old": "tol", "new": "t"}]))
+    expect(not twice["success"] and "occurs" in twice["error"] and "times" in twice["error"], "an edit whose text occurs several times is refused", twice)
+    expect((await gh.call("gh_script", action="get", id="EDITED"))["source"] == before, "refused edits change nothing")
+
+    # Review finding 4: trailing spaces the script has and the edit's text hasn't are ignored, and said so.
+    res = await gh.call("gh_script", action="set", id="EDITED",
+                        code="#! python 3\ntol = 0.5   \nscale = 3\nreport = 'tol %s scale %s' % (tol, scale)")
+    expect(res.get("success"), "setting a script with trailing spaces failed", res)
+    kept = "tol = 0.5   \n" in (await gh.call("gh_script", action="get", id="EDITED"))["source"].replace("\r\n", "\n")
+    res = await gh.call("gh_script", action="edit", id="EDITED", solve=True,
+                        edits=json.dumps([{"old": "tol = 0.5\nscale = 3", "new": "tol = 0.25\nscale = 3"}]))
+    expect(res.get("success") and report(res) == ["tol 0.25 scale 3"], "an edit differing only in trailing spaces should apply", res)
+    if kept:
+        expect(any("matched ignoring trailing spaces on line" in n for n in res.get("notes", [])),
+               "the answer should say the edit matched ignoring trailing spaces", res)
+
+
+@check("watch", "gh_batch options.watch reads the named outputs back after the one solve; a bad name changes nothing")
+async def watch(gh):
+    await gh.clear()
+    r = await gh.batch(
+        components=[
+            {"ref": "v_count", "slider": {"min": 1, "max": 10, "value": 4, "decimals": 0}, "nickname": "V COUNT"},
+            {"ref": "v_series", "type": "Series"},
+            {"ref": "v_out", "param": "Number", "nickname": "V OUT"},
+            {"ref": "v_note", "panel": "hello", "nickname": "V NOTE"},
+        ],
+        wires=[["V COUNT", "v_series.C"], ["v_series.S", "V OUT"]],
+        options={"watch": ["V OUT", "v_note", "v_series"]},
+    )
+    expect(r["ok"] and r["solved"], "setup failed", r)
+    expect(r.get("watch") == ["V OUT 4", 'v_note 1 ["hello"]', "v_series.S 4"],
+           "watch should give a line per output: a nickname, a ref, and a component's outputs", r)
+
+    r = await gh.batch(set=[{"target": "V COUNT", "value": 6}], options={"watch": ["V OUT"]})
+    expect(r["ok"] and r.get("watch") == ["V OUT 6"], "watch should read existing outputs after the solve", r)
+
+    # An item past the end of a list (wrap off) is empty: the line must say so, not count it as an item.
+    nulls = await gh.batch(components=[{"ref": "v_item", "type": "List Item"}],
+                           set=[{"target": "v_item.i", "value": 20}, {"target": "v_item.W", "value": False}],
+                           wires=[["V OUT", "v_item.L"]], options={"watch": ["v_item.0"]})
+    expect(nulls["ok"] and nulls.get("watch") == ["v_item.0 1 (1 empty)"],
+           "watch should say how many items are empty", nulls)
+
+    bad = await gh.batch(set=[{"target": "V COUNT", "value": 2}], options={"watch": ["NO SUCH OUTPUT"]})
+    expect(not bad["ok"] and not bad["changed"] and any(e.startswith("options.watch[0]") for e in bad["errors"]),
+           "a watch name that doesn't resolve is an error", bad)
+    expect("watch" not in bad, "a rejected batch has no watch lines", bad)
+    expect(float(await gh.value("V COUNT")) == 6, "a rejected batch changes nothing")
+
+    dry = await gh.batch(set=[{"target": "V COUNT", "value": 2}], options={"dryRun": True, "watch": ["V OUT"]})
+    expect(dry["ok"] and dry.get("dryRun") and "watch" not in dry, "a dry run checks watch names but reads nothing", dry)
+
+    unsolved = await gh.batch(components=[{"ref": "v_series2", "type": "Series"}],
+                              options={"solve": False, "watch": ["v_series2.S"]})
+    expect(unsolved["ok"] and unsolved.get("watch") == ["v_series2.S 0 (not solved)"],
+           "with solve false, watch says the output isn't solved", unsolved)
+
+    empty = await gh.batch(options={"watch": ["V OUT"]})
+    expect(not empty["ok"] and "gh_inspect(action='tree')" in empty["errors"][0],
+           "a batch with only watch points to gh_inspect tree", empty)
+    expect(len(json.dumps(r)) < 1500, "a watched batch result should stay short")
+
+
 @check("thallus", "Lichen Thalli: outline shows them with the author's text, and no tool changes them (needs the Thallus test file)", clears=False)
 async def thallus(gh):
     ov = await gh.call("gh_canvas", action="outline")
@@ -822,6 +996,167 @@ async def thallus(gh):
     expect(same_listing(before, after), "nothing on the canvas may change", diff_listing(before, after))
 
 
+@check("busy", "While Grasshopper is held by a slow script, calls answer 'busy' within about 15 s instead of hanging, and gh_batch changes nothing; a slow sweep answers before re-solving the restored value, and a sweep or batch sent during a solve waits through it (no false dialog)")
+async def busy(gh):
+    await gh.clear()
+    r = await gh.batch(
+        components=[{"ref": "b_sleeper", "type": "Python 3 Script", "nickname": "SLEEPER"},
+                    {"ref": "b_count", "slider": {"min": 1, "max": 10, "value": 3, "decimals": 0}, "nickname": "B COUNT"}])
+    expect(r["ok"], "setup failed", r)
+    awake = "#! python 3\na = 1"
+    res = await gh.call("gh_script", action="configure", id="SLEEPER", inputs="[]",
+                        outputs=json.dumps([{"name": "a"}]), code=awake, solve=True)
+    expect(res["success"], "configuring the sleeper failed", res)
+
+    def solving(probe):
+        return bool((probe.get("grasshopper") or {}).get("solving"))
+
+    async def hold():
+        """Start one call that solves the sleeper for 25 s, and return it (still running) once
+        Grasshopper is solving: the other calls arrive during that solve, as in the session where
+        a checker script held Grasshopper."""
+        task = asyncio.create_task(gh.call("gh_script", action="set", id="SLEEPER", solve=True,
+                                           code="#! python 3\nimport time\ntime.sleep(25)\na = 2"))
+        for _ in range(50):
+            if solving(await gh.call("gh_inspect", action="connection")):
+                return task
+            if task.done():
+                break
+            await asyncio.sleep(0.1)
+        result = await task
+        if not result.get("success"):
+            raise CheckFailed(f"setting the sleeper failed: {result}")
+        raise CheckFailed("the sleeper never started solving")
+
+    async def release(task):
+        if task is not None:
+            await task
+        await gh.call("gh_script", action="set", id="SLEEPER", code=awake, solve=True)
+
+    task = None
+    try:
+        task = await hold()
+        started = time.monotonic()
+        info = await gh.call("gh_document", action="info")
+        waited = time.monotonic() - started
+        expect(info["_isError"] and "has been solving" in info.get("error", "") and "stopped before reaching it" in info["error"],
+               "a call during a long solve should say Grasshopper is solving", info)
+        expect(12 <= waited < 19, f"the busy answer should come after about 15 s, came after {waited:.1f} s")
+        probe = await gh.call("gh_inspect", action="connection")
+        expect(probe["success"] and solving(probe), "the connection probe answers at once during the solve", probe)
+        held = await task
+        task = None
+        expect(held["success"] and held.get("solved") is True, "the slow call itself finishes normally", held)
+        await release(None)
+        expect((await gh.call("gh_document", action="info"))["success"], "after the solve, calls work again")
+
+        task = await hold()
+        r = await gh.batch(set=[{"target": "B COUNT", "value": 7}])
+        expect(not r["ok"] and not r["changed"] and "has been solving" in r["errors"][0] and "Nothing was changed" in r["errors"][0],
+               "gh_batch during a long solve should refuse and change nothing", r)
+        await task
+        task = None
+        expect(float(await gh.value("B COUNT")) == 3, "the refused batch changed nothing")
+
+        # A sweep whose solve is slow answers after one solve; Grasshopper puts the slider back after it.
+        # The script sleeps only once the slider is wired, so every slow solve runs inside a call
+        # (a solve Grasshopper starts by itself while no call is running reads as a dialog: see below).
+        res = await gh.call("gh_script", action="configure", id="SLEEPER",
+                            inputs=json.dumps([{"name": "n", "type": "int", "access": "item"}]),
+                            code="#! python 3\nimport time\nif n:\n    time.sleep(8)\na = n")
+        expect(res.get("success"), "giving the sleeper a slider input failed", res)
+        wired = await gh.batch(wires=[["B COUNT", "SLEEPER.n"]])
+        expect(wired.get("ok"), "wiring the slider to the sleeper failed", wired)
+        started = time.monotonic()
+        sw = await gh.call("gh_document", action="sweep", id="B COUNT", values="[5]", watch='["SLEEPER.a"]')
+        took = time.monotonic() - started
+        expect(sw.get("success") and "re-solves it after this answer" in sw.get("restored", ""),
+               "after a slow solve the sweep should say Grasshopper re-solves the restored value after the answer", sw)
+        expect(took < 13, f"the sweep should answer after one 8 s solve, not two (it took {took:.1f} s)")
+        for _ in range(150):
+            if not solving(await gh.call("gh_inspect", action="connection")):
+                break
+            await asyncio.sleep(0.2)
+        expect(float(await gh.value("B COUNT")) == 3, "the slider is back at 3")
+        out = await gh.call("gh_inspect", action="outputs", id="SLEEPER")
+        a = [o for o in out.get("outputs", []) if o["name"] == "a"]
+        expect(a and a[0]["preview"] == ["3"], "once Grasshopper has re-solved, the script has the restored value again", out)
+
+        async def wait_free():
+            for _ in range(150):
+                if not solving(await gh.call("gh_inspect", action="connection")):
+                    return
+                await asyncio.sleep(0.2)
+
+        # Review finding 2: a sweep sent while the restored value re-solves waits for that solve, then runs.
+        first = await gh.call("gh_document", action="sweep", id="B COUNT", values="[5]", watch='["SLEEPER.a"]')
+        expect(first.get("success") and "re-solves it after this answer" in first.get("restored", ""),
+               "setup: a slow sweep that restores after its answer", first)
+        started = time.monotonic()
+        second = await gh.call("gh_document", action="sweep", id="B COUNT", values="[6]", watch='["SLEEPER.a"]')
+        took = time.monotonic() - started
+        expect(second.get("success") and (second.get("results") or [""])[0].startswith("6 →"),
+               "a sweep sent while the restored value re-solves should wait for that solve and then run", second)
+        expect(took < 25, f"the second sweep should wait about one solve, then run one (it took {took:.1f} s)")
+        await wait_free()
+
+        # Review finding 1: the end of a solve over 5 s reads as a dialog for a moment (the solve is
+        # tracked; the next heartbeat hasn't landed). A gh_batch waiting through it must not report a
+        # dialog. Configure without solve: Hyperceps's status refresh after the call solves the script.
+        for attempt in range(3):
+            res = await gh.call("gh_script", action="configure", id="SLEEPER",
+                                code=f"#! python 3\nimport time\nif n:\n    time.sleep(8)\na = n + {attempt}")
+            expect(res.get("success"), "giving the sleeper new code failed", res)
+            r = await gh.batch(components=[{"ref": f"b_dlg{attempt}", "param": "Number"}])
+            expect(r.get("ok"), "a gh_batch sent while an 8 s solve runs should wait through its end, not report a dialog", r)
+            await wait_free()
+
+        # Review finding 3: fast values but a slow original value. Putting the control back would take
+        # 8 s inside the call; the sweep reads the original value's solve time first and restores after.
+        res = await gh.call("gh_script", action="configure", id="SLEEPER",
+                            code="#! python 3\nimport time\nif n == 3:\n    time.sleep(8)\na = n")
+        expect(res.get("success"), "giving the sleeper new code failed", res)
+        await asyncio.sleep(0.5)
+        await wait_free()   # Hyperceps's refresh solves it at 3: 8 s, which Grasshopper records
+        started = time.monotonic()
+        fast = await gh.call("gh_document", action="sweep", id="B COUNT", values="[5, 6]", watch='["SLEEPER.a"]')
+        took = time.monotonic() - started
+        expect(fast.get("success") and "re-solves it after this answer" in fast.get("restored", ""),
+               "with a slow original value, the sweep should restore after its answer", fast)
+        expect(took < 5, f"two fast values should answer quickly, without the 8 s restore (it took {took:.1f} s)")
+        await asyncio.sleep(0.5)
+        await wait_free()
+        expect(float(await gh.value("B COUNT")) == 3, "the slider is back at 3 after the fast sweep")
+    finally:
+        await release(task)
+
+
+@check("fixes", "Saving without a path uses the definition's own file; images save to paths over 260 characters; a built-in type wins over plugin namesakes; the time-limit error explains itself")
+async def fixes(gh):
+    await gh.clear()
+    saved = await gh.call("gh_document", action="save")
+    expect(saved["success"] and os.path.normcase(saved["path"]) == os.path.normcase(str(gh.scratch)),
+           "save without a path should save to the scratch file itself", saved)
+
+    import tempfile, shutil
+    root = Path(tempfile.gettempdir()) / "hyperceps-longpath-check"
+    target = root / ("x" * 120) / ("y" * 120) / "view.png"
+    expect(len(str(target)) > 260, "the test path should be over 260 characters")
+    try:
+        shot = await gh.call("gh_document", action="capture_viewport", path=str(target), width=200, height=150)
+        expect(shot["success"] and target.exists(), "a capture to a long path should be written", shot)
+    finally:
+        shutil.rmtree(root, ignore_errors=True)
+
+    r = await gh.batch(components=[{"ref": "f_offset", "type": "Offset Curve"}])
+    expect(r["ok"], "'Offset Curve' should resolve to Grasshopper's (with a warning if a plugin has one too)", r)
+    for w in (w for w in r["warnings"] if "Offset Curve" in w):
+        expect("Grasshopper's Curve/Util/Offset Curve" in w and "has one too" in w, "the warning names the plugin's type", r)
+
+    bad = await gh.batch(components=[{"ref": "f_x", "param": "Number"}], options={"timeoutSeconds": 500})
+    expect(not bad["ok"] and any("the solve isn't counted" in e for e in bad["errors"]), "the time-limit error says the solve isn't counted", bad)
+
+
 @check("guidance", "The agent guidance reaches the AI app: descriptions, connection note, nudge after repeated single-step edits, hints")
 async def guidance(gh):
     await gh.clear()
@@ -829,8 +1164,22 @@ async def guidance(gh):
     first = (gh.instructions or "").splitlines()[0]
     expect(first.startswith("Hyperceps ") and ": MCP control" in first and "+build" not in first,
            "the connection note should open with 'Hyperceps <version>:'", first)
-    expect('Claude skill "hyperceps"' in gh.instructions and "load it now" in gh.instructions and "tell the user once" in gh.instructions,
-           "the connection note should ask for the hyperceps skill")
+    expect("GUIDE FIRST" in gh.instructions and '"hyperceps" skill' in gh.instructions and "gh_inspect(action='skill')" in gh.instructions,
+           "the connection note should ask for the guide: the installed skill, or gh_inspect(action='skill')")
+    sent = gh.instructions.replace("\r\n", "\n").replace("\n", "\r\n")
+    expect(len(sent) <= 3900, f"the connection note should fit what Claude Code shows (4,096 characters); it is {len(sent)}")
+
+    # The plugin serves its own copy of the skill: the repository's SKILL.md without its front matter.
+    skill_file = (Path(__file__).resolve().parent.parent / "skills" / "hyperceps" / "SKILL.md").read_text(encoding="utf-8")
+    body = skill_file.replace("\r\n", "\n").split("\n---\n", 1)[1].lstrip("\n")
+    served = await gh.session.call_tool("gh_inspect", {"action": "skill"})
+    text = served.content[0].text.replace("\r\n", "\n")
+    expect(not served.is_error and text.startswith("The Hyperceps guide") and text.rstrip().endswith(body.rstrip()),
+           "gh_inspect(action='skill') should return the repository's SKILL.md (rebuild and reinstall if it changed)", text[:300])
+    version = first.split(" ")[1].rstrip(":")
+    expect(f"This skill is for Hyperceps {version}." in text, f"the served skill should name the plugin's version {version}", text[:300])
+    resource = await gh.session.read_resource("gh://skill")
+    expect(body.rstrip() in resource.contents[0].text.replace("\r\n", "\n"), "the resource gh://skill should serve the same skill")
     tools = {t.name: t for t in (await gh.session.list_tools()).tools}
     expect("two or more changes" in tools["gh_batch"].description, "gh_batch description should state when to use it")
     for name in ("gh_canvas", "gh_wire"):

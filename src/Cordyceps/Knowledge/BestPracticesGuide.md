@@ -2,9 +2,9 @@
 
 ## Essential Rules
 
-1. **Two or more changes: one `gh_batch` call.** It checks every entry before changing anything, pauses the solver, applies the batch as one undo step and solves once. Build large work one block per batch and check each block before the next. (Without gh_batch, disable the solver during bulk single-step edits: `gh_document(action='solver', enabled=false)` ... `enabled=true`.)
+1. **Two or more changes: one `gh_batch` call.** It checks every entry before changing anything, pauses the solver, applies the batch as one undo step and solves once. Build large work one block per batch and check each block before the next: `options={"watch": ["BLOCK OUTPUT"]}` returns the item counts of the outputs you name in the same call. (Without gh_batch, disable the solver during bulk single-step edits: `gh_document(action='solver', enabled=false)` ... `enabled=true`.)
 
-2. **Naming**: never rename native components — renamed components are hard to find and it is not the Grasshopper convention. DO give a capitalised nickname to the parameters at a block's edges (the ones that hand data in or out, e.g. `BOTTOM CRVS`) and to input panels and sliders (what they hold, units in brackets: `TRUSS DEPTH (m)`); these are the stable handles to find things later. Name custom script components after their function. Put each block in a group named in capitals after what it makes.
+2. **Naming**: never rename native components — renamed components are hard to find and it is not the Grasshopper convention. DO give a capitalised nickname to the parameters at a block's edges (the ones that hand data in or out, e.g. `LOWER CRVS`) and to input panels and sliders (what they hold, units in brackets: `OFFSET (m)`); these are the stable handles to find things later. Name custom script components after their function. Put each block in a group named in capitals after what it makes.
 
 3. **Validate before connecting**: gh_batch checks every port before wiring (use `options={"dryRun": true}` to check names alone). With single-step wiring, use `gh_wire(action='validate', ...)`
 
@@ -31,10 +31,10 @@
 | Type | Name |
 |------|------|
 | Native components | Never renamed |
-| Block-edge parameters | Capitals, what they carry: "BOTTOM CRVS", "PAIRS" |
-| Input sliders and panels | Capitals, what they hold (units/meaning in brackets): "TRUSS DEPTH (m)" |
+| Block-edge parameters | Capitals, what they carry: "LOWER CRVS", "PAIRS" |
+| Input sliders and panels | Capitals, what they hold (units/meaning in brackets): "OFFSET (m)" |
 | Scripts | Function: "Calculate Area" |
-| Groups | Capitals, after what the block makes: "TOP CHORDS" |
+| Groups | Capitals, after what the block makes: "UPPER CURVES" |
 | gh_batch refs | lowercase: `split`, `item` |
 
 ## Expensive Operations (Cache with Data Dam)

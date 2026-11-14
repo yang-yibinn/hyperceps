@@ -36,7 +36,14 @@ namespace Cordyceps.Core
             // console emission.
             if (_buffer.Add(message, level, messageLevel))
             {
-                RhinoApp.WriteLine($"Hyperceps [{level}]: {message}");
+                var line = $"Hyperceps [{level}]: {message}";
+                // Hyperceps: from a worker thread, RhinoApp.WriteLine waits for the UI thread, so
+                // while Grasshopper was solving it held a tool's answer until the solve ended.
+                // Post the line instead; it reaches the command line once Rhino is free.
+                if (RhinoApp.InvokeRequired)
+                    RhinoApp.InvokeOnUiThread(new Action(() => RhinoApp.WriteLine(line)));
+                else
+                    RhinoApp.WriteLine(line);
             }
         }
 

@@ -24,6 +24,8 @@ namespace Cordyceps.Tools.Batch
         public List<BatchOp> Groups { get; } = new List<BatchOp>();
         public HashSet<IGH_Param> NewParams { get; } = new HashSet<IGH_Param>();
         public HashSet<IGH_DocumentObject> NewObjects { get; } = new HashSet<IGH_DocumentObject>();
+        /// <summary>options.watch, resolved: read back after the solve.</summary>
+        public List<(string Name, IGH_Param Param)> Watch { get; } = new List<(string, IGH_Param)>();
 
         public IEnumerable<BatchItem> Created => NewItems.Where(i => !i.Failed && i.Obj != null);
 
@@ -62,6 +64,7 @@ namespace Cordyceps.Tools.Batch
 
         private readonly List<(IGH_Param Param, string Path)> _valueTargets = new List<(IGH_Param, string)>();
         private readonly List<(BatchItem Item, string Setting)> _treeComponents = new List<(BatchItem, string)>();
+        private readonly HashSet<string> _setAsideWarned = new HashSet<string>();
         private readonly Dictionary<BatchItem, int> _layoutIds = new Dictionary<BatchItem, int>();
         private readonly Dictionary<int, AutoLayout.Node> _layout = new Dictionary<int, AutoLayout.Node>();
         private readonly List<(int, int)> _edges = new List<(int, int)>();
@@ -85,6 +88,7 @@ namespace Cordyceps.Tools.Batch
             PlanInserts();
             PlanWires();
             PlanGroups();
+            PlanWatch();
             PlanLayout();
             WarnWiredValues();
             HintTreeComponents();
@@ -296,6 +300,10 @@ namespace Cordyceps.Tools.Batch
                 case TypeResolutionKind.Resolved:
                     if (res.UsedDeprecated)
                         _warnings.Add($"{path}: '{c.TypeText}' resolved to a deprecated type, {res.Match.Describe()}, because it was the only match");
+                    if (res.SetAside.Count > 0 && _setAsideWarned.Add(c.TypeText.ToLowerInvariant()))
+                        _warnings.Add($"{path}: '{c.TypeText}' is Grasshopper's {res.Match.PathText}; "
+                            + string.Join("; ", res.SetAside.Take(3).Select(x => $"{x.Plugin} has one too ('{x.Category}/{x.Name}')"))
+                            + ". Write that name for the plugin's");
                     var obj = BatchCatalog.Emit(res.Match.Guid);
                     if (obj == null)
                         _errors.Add($"{path}: Grasshopper could not create {res.Match.Describe()}");
@@ -933,6 +941,15 @@ namespace Cordyceps.Tools.Batch
         }
 
         // ---- layout, warnings, hints ------------------------------------------------------------
+
+        private void PlanWatch()
+        {
+            var names = _spec.Options.Watch;
+            if (names.Count == 0) return;
+            _plan.Watch.AddRange(WatchedOutputs.Resolve(_canvas, names, i => $"options.watch[{i}]", _errors));
+            if (_plan.Watch.Count > BatchOptions.MaxWatch)
+                _errors.Add($"options.watch: {_plan.Watch.Count} outputs; at most {BatchOptions.MaxWatch} (a component named without a port counts each of its outputs)");
+        }
 
         private void PlanLayout()
         {

@@ -50,7 +50,7 @@ namespace Cordyceps.Core.Batch
 
         private static readonly string[] OptionFields =
         {
-            "atomic", "dryRun", "solve", "returnRuntimeMessages", "maxOperations", "timeoutSeconds"
+            "atomic", "dryRun", "solve", "returnRuntimeMessages", "maxOperations", "timeoutSeconds", "watch"
         };
 
         private static readonly string[] Shortcuts = { "type", "param", "panel", "slider", "valueList", "toggle" };
@@ -286,7 +286,7 @@ namespace Cordyceps.Core.Batch
         {
             if (!(token is JObject obj))
             {
-                errors.Add($"{path}: must be an object like {{\"ref\": \"cull\", \"on\": [\"POSTS.0\", \"POST OUT.0\"]}}, got {Kind(token)}");
+                errors.Add($"{path}: must be an object like {{\"ref\": \"cull\", \"on\": [\"POINTS.0\", \"POINT OUT.0\"]}}, got {Kind(token)}");
                 return null;
             }
 
@@ -413,12 +413,37 @@ namespace Cordyceps.Core.Batch
             if (timeout.HasValue)
             {
                 if (timeout.Value <= 0 || timeout.Value > BatchOptions.TimeoutCeilingSeconds)
-                    errors.Add($"options.timeoutSeconds: must be more than 0 and at most {BatchOptions.TimeoutCeilingSeconds}");
+                    errors.Add($"options.timeoutSeconds: must be more than 0 and at most {BatchOptions.TimeoutCeilingSeconds}. "
+                        + "It limits checking and applying only; the solve isn't counted");
                 else
                     options.TimeoutSeconds = timeout.Value;
             }
 
+            ParseWatch(obj, options, errors);
             return options;
+        }
+
+        private static void ParseWatch(JObject obj, BatchOptions options, List<string> errors)
+        {
+            var token = Find(obj, "watch");
+            if (token == null || token.Type == JTokenType.Null)
+                return;
+            if (token.Type == JTokenType.String)
+                token = new JArray(token);
+            if (!(token is JArray list))
+            {
+                errors.Add("options.watch: must be a list of outputs, e.g. [\"DIAGONALS\", \"checker.report\"]");
+                return;
+            }
+
+            for (int i = 0; i < list.Count; i++)
+            {
+                var name = ReadNameToken($"options.watch[{i}]", list[i], errors);
+                if (name != null && !options.Watch.Contains(name, StringComparer.Ordinal))
+                    options.Watch.Add(name);
+            }
+            if (options.Watch.Count > BatchOptions.MaxWatch)
+                errors.Add($"options.watch: at most {BatchOptions.MaxWatch} outputs");
         }
 
         // ---- nested shapes ------------------------------------------------------------------

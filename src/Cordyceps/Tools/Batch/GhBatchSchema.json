@@ -71,7 +71,7 @@
     },
     "options": {
       "type": "object",
-      "description": "atomic (true), dryRun (false), solve (true), returnRuntimeMessages (true), maxOperations (1000), timeoutSeconds (60)."
+      "description": "atomic (true), dryRun (false), solve (true), returnRuntimeMessages (true), maxOperations (1000), timeoutSeconds (60), watch ([]: up to 10 outputs, \"obj\" or \"obj.port\", refs from this batch included, read back after the solve as count (and how many are empty), branches and a short preview)."
     }
   }
 }

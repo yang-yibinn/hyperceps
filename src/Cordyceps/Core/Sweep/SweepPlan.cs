@@ -47,6 +47,14 @@ namespace Cordyceps.Core.Sweep
     {
         public string Name { get; set; }
         public int Items { get; set; }
+
+        /// <summary>
+        /// How many of <see cref="Items"/> are empty (null). Shown as "(N empty)", because a count that
+        /// includes empty slots reads as that many real items (a benchmark run reported 248 pieces of design
+        /// geometry where 124 were empty).
+        /// </summary>
+        public int Empty { get; set; }
+
         public int Branches { get; set; }
 
         /// <summary>Up to three short values (text quoted), for text, number and true/false outputs; null otherwise.</summary>
@@ -81,6 +89,56 @@ namespace Cordyceps.Core.Sweep
         public const int MaxWatch = 10;
         public const double TimeBudgetSeconds = 45;
         private const int MaxNewProblems = 3;
+
+        /// <summary>A solve slower than this puts the control back after the answer, not before it.</summary>
+        public const long RestoreAfterAnswerMs = 5000;
+
+        /// <summary>
+        /// Whether the control is put back after the answer: Grasshopper re-solves it then, instead of the
+        /// call waiting for that solve. On a definition whose solve took 34 s, a one-value sweep spent
+        /// another 34 s restoring the slider, and the call (67.5 s) outlasted the AI app's ~60 s limit.
+        /// </summary>
+        public static bool RestoreAfterAnswer(long lastSolveMs) => lastSolveMs > RestoreAfterAnswerMs;
+
+        /// <summary>Seconds a restore is allowed for when checking the time limit before the next value.</summary>
+        public static double RestoreAllowanceSeconds(long lastSolveMs) => RestoreAfterAnswer(lastSolveMs) ? 0 : lastSolveMs / 1000.0;
+
+        /// <summary>The result's <c>restored</c> line: the control's value, and when it re-solves after the answer, how long that takes.</summary>
+        public static string RestoredText(string name, string value, long lastSolveMs) =>
+            RestoredText(name, value, RestoreAfterAnswer(lastSolveMs), lastSolveMs);
+
+        /// <summary>Time already spent after which the control is put back after the answer, whatever the solves took.</summary>
+        public const double RestoreAfterElapsedSeconds = 15;
+
+        /// <summary>
+        /// The full rule (review finding 3): put the control back after the answer when the slowest value
+        /// or the original value's last solve took over 5 s, when more than 15 s has already been spent
+        /// (the restore's own time isn't known), or when a step failed (the error is the answer). Ten
+        /// values of 3 s with a 34 s original value would otherwise end 64 s into the call.
+        /// </summary>
+        public static bool RestoreAfterAnswer(long slowestStepMs, long originalSolveMs, double elapsedSeconds, bool failed) =>
+            failed
+            || RestoreAfterAnswer(Math.Max(slowestStepMs, originalSolveMs))
+            || elapsedSeconds > RestoreAfterElapsedSeconds;
+
+        /// <summary>
+        /// Seconds to allow for the restore when checking the time limit before the next value: none when it
+        /// will happen after the answer, else the larger of the slowest value and the original value.
+        /// </summary>
+        public static double RestoreAllowanceSeconds(long slowestStepMs, long originalSolveMs, double elapsedSeconds) =>
+            RestoreAfterAnswer(slowestStepMs, originalSolveMs, elapsedSeconds, false) ? 0 : Math.Max(slowestStepMs, originalSolveMs) / 1000.0;
+
+        /// <summary>
+        /// The <c>restored</c> line for the full rule. <paramref name="estimateMs"/> is the expected re-solve
+        /// time (the original value's last solve, else the slowest value); 0 leaves the time out.
+        /// </summary>
+        public static string RestoredText(string name, string value, bool afterAnswer, long estimateMs)
+        {
+            if (!afterAnswer) return $"{name} = {value}";
+            return estimateMs >= 500
+                ? $"{name} = {value} (Grasshopper re-solves it after this answer, about {(estimateMs / 1000.0).ToString("0", CultureInfo.InvariantCulture)} s)"
+                : $"{name} = {value} (Grasshopper re-solves it after this answer)";
+        }
 
         /// <summary>
         /// The steps for <paramref name="valuesJson"/>: a JSON list of values, or nothing for every
@@ -244,19 +302,11 @@ namespace Cordyceps.Core.Sweep
         }
 
         /// <summary>
-        /// One step in a line: "5 → TOP BRACING 166 · chk.out 1 ["BM=5 …"] · 0 errors · 1.5 s".
+        /// One step in a line: "5 → DIAGONALS 166 · chk.out 1 ["BM=5 …"] · 0 errors · 1.5 s".
         /// </summary>
         public static string Line(SweepStepResult r)
         {
-            var parts = new List<string>();
-            foreach (var w in r.Watch)
-            {
-                var text = $"{w.Name} {w.Items}";
-                if (w.Branches > 1) text += $" in {w.Branches} branches";
-                if (w.Preview != null) text += $" [{w.Preview}]";
-                if (!w.Solved) text += " (not solved)";
-                parts.Add(text);
-            }
+            var parts = r.Watch.Select(WatchText).ToList();
 
             // Warnings are always stated: "0 errors" alone left an agent unsure whether warnings were checked.
             var problems = CanvasCount(r.Errors, "error") + ", " + CanvasCount(r.Warnings, "warning");
@@ -267,6 +317,17 @@ namespace Cordyceps.Core.Sweep
             parts.Add($"{(r.SolveMs / 1000.0).ToString("0.0", CultureInfo.InvariantCulture)} s");
 
             return $"{r.Label} → {string.Join(" · ", parts)}";
+        }
+
+        /// <summary>One watched output: <c>NAME items[ (N empty)][ in N branches][ [preview]][ (not solved)]</c>. gh_batch's watch uses it too.</summary>
+        public static string WatchText(SweepWatchResult w)
+        {
+            var text = $"{w.Name} {w.Items}";
+            if (w.Empty > 0) text += $" ({w.Empty} empty)";
+            if (w.Branches > 1) text += $" in {w.Branches} branches";
+            if (w.Preview != null) text += $" [{w.Preview}]";
+            if (!w.Solved) text += " (not solved)";
+            return text;
         }
 
         /// <summary>Short values for a preview: text quoted, each clipped, at most three.</summary>

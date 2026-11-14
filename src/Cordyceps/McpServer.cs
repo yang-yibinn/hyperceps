@@ -647,72 +647,9 @@ namespace Cordyceps
 
         private string GetServerInstructions(string version)
         {
-            // Hyperceps: name, version and the companion skill come first (Core/SkillPairing).
-            return SkillPairing.Header(version) + @"READ FIRST: gh://docs/getting-started (use resources/read)
-
-WORKING METHOD (every tool call is a full round trip, so fewer, larger calls are much cheaper):
-1. Read the canvas once with gh_canvas(action='outline'): each group, what flows in and out of it,
-   sliders and errors, in one short call. Then group='NAME' for how one group is wired inside, or
-   id='NAME' for what is around one object. Then plan.
-2. For two or more changes, use ONE gh_batch call; single-step tools are for a single change.
-3. Build large work one block per batch (typically 20-80 objects) and check each block before the next.
-4. Graft, flatten, simplify and reverse are port settings (inputModifiers / outputModifiers), not
-   Graft Tree / Flatten Tree / Simplify Tree / Reverse List components. A list of values is one panel,
-   one value per line - not a comma list plus Text Split.
-5. Refer to existing objects by nickname (or GUID prefix) and reuse refs from earlier batches. These
-   names work as the id in EVERY tool (gh_script, gh_inspect, gh_canvas, gh_wire), not only gh_batch.
-6. After a change that affects tree structure, check those outputs with gh_inspect(action='tree').
-7. Send the real gh_batch: a batch with errors changes nothing and lists them all, so a dry run of the
-   whole block only means writing it twice. Use options.dryRun to try a few guessed names first.
-8. To check results across slider (or value list, toggle) values, use ONE
-   gh_document(action='sweep', id='SLIDER', values='[5,7,9]', watch='[""OUTPUT"", ""obj.port""]'): it sets
-   each value, solves, reports item counts and errors, and puts the control back.
-gh_batch checks everything before changing anything, applies the batch as one undo step, pauses the
-solver, solves once and returns a short summary; leave out x/y and it lays objects out left to right.
-NAMING: never rename native components. Give capitalised nicknames to the parameters at a block's
-edges and to input panels/sliders (""TRUSS DEPTH (m)""); name script components after their function;
-put each block in a group named in capitals after what it makes; refs are lowercase.
-LICHEN THALLI: groups that outline shows as THALLUS carry the author's description and properties;
-read them to understand a block's purpose. Hyperceps never changes a Thallus (its members, name,
-colour or hidden T output); the user does that in Grasshopper with Lichen.
-
-UNIFIED TOOLS (use action='help' for details):
-- gh_canvas: outline, add, delete, move, rename, find, search, list, info, bounds, validate, constant, bake, zoom, view, get, set, config, preview, enable, group_create, group_delete, group_add, group_remove, group_list, group_rename, group_color, group_move, zoomable, modifier
-- gh_wire: connect, disconnect, list, clear, validate
-- gh_document: info, save, clear, solver, recompute (rejected while a solution is running), sweep (a control through several values, one call), undo, redo (both disabled — use snapshot/revert), snapshot, revert, snapshots, snapshot_delete (max 20 snapshots kept; oldest evicted), capture_canvas, capture_viewport, capture_region, capture_views
-- gh_script: get, set, configure, info (set/configure rebuild the component from the new source and report rebuilt/verified; compile errors surface on the component — check gh_inspect(action='status') after writing code)
-- gh_inspect: connection, status, outputs, trace, disconnected, geometry, log, reports, categories, docs, tree (branch paths and counts; names like gh_batch)
-- rhino_scene: objects, select, deselect, set_layer, set_name, layers, layer_create, layer_set, layer_delete, hide, show, delete, set_color, bbox, place_image, script
-- rhino_render: display, camera, zoom, modes, render, settings, ground, sun, skylight, view_save, view_load, view_list, view_delete, light_add, light_list, light_set, light_delete, material_list, material_library, material_instantiate, material_create, material_texture, material_apply, material_delete, env_list, env_current, env_set, env_create, env_delete
-
-STATUS BLOCK: every tool response carries a compact ""status"" object — {document, ui, solving}, plus
-solving_since / modal_inferred / solving_document / hint when something is off. ""document"" is the
-.gh file the call acted on; check it, because tools follow whichever canvas tab the human focused.
-""solving_document"" appears only when a DIFFERENT open definition is the one holding the solver.
-
-BUSY IS NOT DEAD. If a call is slow or silent, call gh_inspect(action='connection') — it answers from
-cached state and never touches the document, so it replies even when everything else is stuck:
-- ui='blocked' + solving=true  -> Grasshopper is mid-solve. WAIT and retry; heavy solves take minutes.
-- modal_inferred=true          -> a modal dialog is open in Rhino. Only a HUMAN can clear it. Stop
-                                  retrying and tell the user what to dismiss.
-- ui='responsive'              -> the host is fine; treat any error as a real tool error.
-
-Key points:
-- gh_batch pauses the solver itself. For bulk single-step edits: gh_document(action='solver', enabled=false)
-- Ambiguous names (""Line"", ""Circle""): use GUID or Category/Name format, or gh_batch ""param""
-- Param specs (param/sourceParam/targetParam) on a COMPONENT: a name, a nickname, or a 0-based
-  index. An index that does not exist is refused and the error names the valid range — it is never
-  rescued as a name match, so add the port first (gh_canvas action='zoomable') rather than
-  re-asking. A free-floating parameter object has no ports of its own, so it IS the target and the
-  spec is ignored
-- Spacing (only when placing by hand): 150px horizontal, 70px vertical
-- CRITICAL: Inside a cluster editor, NEVER advise the user to press F5 or use Grasshopper's native recompute. It will destroy cluster inputs. Use gh_document(action='recompute') instead — it is cluster-safe.
-
-VERIFY PERIODICALLY: gh_batch results already list errors and warnings that changed downstream; after
-a section of work, also run gh_inspect(action='status') to catch errors elsewhere.
-
-Resources: gh://docs/getting-started, gh://docs/data-trees, gh://docs/common-errors, gh://component/{name}, gh://patterns/*
-";
+            // Hyperceps: the note lives in Core/ServerNote (kept under Claude Code's 4,096-character
+            // limit, unit-tested); it opens with name, version and the guide (Core/SkillPairing).
+            return ServerNote.Text(version);
         }
 
         private object HandleToolsList()
@@ -809,7 +746,12 @@ Resources: gh://docs/getting-started, gh://docs/data-trees, gh://docs/common-err
             {
                 // Log the full exception (type + stack) operator-side for root-causing; the client
                 // payload stays message-only via FormatExceptionResult.
-                Core.DebugLog.WriteLine($"Tool '{name}' threw: {ex}", "ERROR", 0);
+                // Hyperceps: a busy refusal is an answer, not a fault: log it quietly, without a stack.
+                var cause = ex is TargetInvocationException && ex.InnerException != null ? ex.InnerException : ex;
+                if (cause is Core.HostBusyException)
+                    Core.DebugLog.Info($"Tool '{name}': {cause.Message}");
+                else
+                    Core.DebugLog.WriteLine($"Tool '{name}' threw: {ex}", "ERROR", 0);
                 var errorText = Core.McpResultFormatter.FormatExceptionResult(ex);
                 return new
                 {

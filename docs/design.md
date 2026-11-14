@@ -31,9 +31,10 @@ names the version it is for, and a unit test keeps the two equal.
 
 | Addition | What it does |
 | --- | --- |
-| `gh_batch` | One JSON spec of components, values, wires, inserts, disconnections, deletions, groups and port settings. Contract: [gh-batch-schema.md](gh-batch-schema.md). |
+| `gh_batch` | One JSON spec of components, values, wires, inserts, disconnections, deletions, groups and port settings; `options.watch` reads named outputs back after the solve. Contract: [gh-batch-schema.md](gh-batch-schema.md). |
 | `gh_canvas(action='outline')` | The canvas in a few lines: groups in data-flow order with what crosses their borders, controls, problems; `group=` for one group's wiring, `id=` and `depth=` for an object's neighbourhood; networks for canvases without groups. |
 | `gh_inspect(action='tree')` | Branch paths and item counts of several outputs at once, grouped into runs, with notes on common tree mistakes. |
+| `gh_script` `edit` and `solve=true` | Change part of a script by sending only the changed passages, and get the script's results and errors back in the same call. |
 | `gh_document(action='sweep')` | One slider, value list or toggle through several values: counts, previews, errors and solve time per value; the control is always put back. |
 | Names everywhere | Every tool takes refs, unique nicknames and 8+ character GUID prefixes, by the same rules as `gh_batch`. |
 | Agent guidance | Connection note, tool descriptions, in-result hints (a nudge after repeated single-step edits; a Graft Tree that could be a port setting; a Text Split a one-value-per-line panel replaces), the guides and the skill. |
@@ -47,7 +48,8 @@ names the version it is for, and a unit test keeps the two equal.
 | Checking before changing | `gh_batch` resolves every name, port and value first and reports every problem at once; nothing changes unless everything is valid. A batch with errors therefore behaves like a dry run, so agents are told to send the real batch. |
 | Undo and rollback | A batch is one Grasshopper undo step: one Ctrl+Z reverts it. A failure while applying is rolled back by reversing the batch's own recorded changes, not by snapshot/revert, which would replace the open file with an unsaved copy. |
 | Solver | Paused during a batch, solved once at the end, left as the user had it. Sweep refuses while the solver is off rather than turning it on. |
-| Names | Strict: exact names, `Category/Name` or GUIDs for component types, never a loose match; a near miss is an error with suggestions. Ambiguous names list their candidates. |
+| Names | Strict: exact names, `Category/Name` or GUIDs for component types, never a loose match; a near miss is an error with suggestions. Ambiguous names list their candidates, except a name shared by one built-in component and only plugin ones: the built-in one is used, with a warning naming the plugin's. |
+| Busy Grasshopper | A call that finds Grasshopper solving, not responding or busy with another call waits up to 15 s, then stops before reaching it and says what is solving and for how long. Before, it waited until the AI app gave up (about a minute) with no explanation, and a stuck script cost minutes of blind retries. |
 | Port settings | Graft, flatten, simplify and reverse are port settings, not Graft Tree / Flatten Tree / Simplify Tree / Reverse List components. |
 | Lists of values | One panel, one value per line, not a comma list plus Text Split. |
 | Compact results | No per-wire echo, every list capped, typical results well under 4 KB. |
@@ -63,8 +65,10 @@ names the version it is for, and a unit test keeps the two equal.
   variable inputs and outputs; panels, sliders, value lists and toggles; port settings; inserts into
   existing wires; addressing by GUID, prefix and nickname; refs across batches; groups; one Ctrl+Z
   reverts a batch; the solver is left as it was and solves once; 300 components and 500 wires in under
-  5 seconds; tree, outline and sweep; the agent guidance reaches the client; every existing tool still
-  works; Lichen Thalli are read and never changed.
+  5 seconds; tree, outline, sweep, script solving and editing, batch watch; a busy Grasshopper
+  answers within about 15 s; saving without a path, long image paths, built-in names over plugin
+  ones; the agent guidance reaches the client; every existing tool still works; Lichen Thalli are
+  read and never changed.
 - **Behaviour checks:** ordinary requests that don't mention batching lead the agent to `gh_batch`;
   port settings instead of tree components; the nudge after repeated single-step edits.
 - **Benchmark:** the same request with Cordyceps and with Hyperceps, measured from each session's
@@ -73,8 +77,6 @@ names the version it is for, and a unit test keeps the two equal.
 
 ## Later
 
-- `gh_script set` returning the script's outputs after solving, so a checking script takes one call
-  per round instead of two (planned for 1.1).
 - `verify_layer`: compare an output with reference geometry on a Rhino layer, only when the user asks
   for such a check.
 - `find_components`: resolve many component names in one call.

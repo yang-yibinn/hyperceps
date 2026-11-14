@@ -39,7 +39,7 @@ namespace Cordyceps.Tools.Unified
                         "Adding a slider: pass min/max/value/decimals to configure it in one call (e.g. type='slider', min=0, max=100, value=50, decimals=2). Non-slider components ignore these.",
                         "Set min/max before value: value is clamped to the range. Same slider config as action='config'.",
                         "A slider value that doesn't parse as a number is an error — the component is NOT added (parity with action='config').",
-                        "Never rename native components (leave 'nickname' unset for them). Do give a capitalised nickname to block-edge parameters and input panels/sliders, e.g. 'TRUSS DEPTH (m)'.",
+                        "Never rename native components (leave 'nickname' unset for them). Do give a capitalised nickname to block-edge parameters and input panels/sliders, e.g. 'OFFSET (m)'.",
                         "Adding more than one thing, or adding and wiring? Use gh_batch: one call for the whole block."
                     }
                 },
@@ -95,12 +95,13 @@ namespace Cordyceps.Tools.Unified
                     Name = "outline",
                     Description = "Read the canvas in one short call: each group with what flows in and out (with item counts), the sliders, toggles and value lists, and any errors. With group=, how a group is wired inside; with id=, what feeds one object and what it feeds",
                     Optional = new[] { "group", "id", "depth" },
-                    Example = "action='outline' OR action='outline', group='BOTTOM BRACING' OR action='outline', group='[\"POSTS\",\"TOP CHORDS\"]' OR action='outline', id='LOFT', depth=3",
+                    Example = "action='outline' OR action='outline', group='CROSS LINES' OR action='outline', group='[\"POINTS\",\"UPPER CURVES\"]' OR action='outline', group='network 1' OR action='outline', id='LOFT', depth=3",
                     Tips = new[] {
                         "Start here instead of list + group_list: one call shows the whole definition, and every name in it works as an id in every tool",
-                        "group=: one line per object, upstream first, each with what feeds it ('L ← BOTTOM CHORDS', '(graft)'); child groups are one line each, opened with their own name. A name may be the start of a longer group name if only one group matches",
-                        "id=: for canvases without groups, what is around one object, depth=N wires each way (default 2, at most 10); the object is marked '*'",
-                        "A canvas without groups is described by its separate networks: inputs, named objects and ends",
+                        "group=: one line per object, upstream first, each with what feeds it ('L ← LOWER CURVES', '(graft)'); child groups are one line each, opened with their own name. A name may be the start of a longer group name if only one group matches",
+                        "id=: what is around one object, depth=N wires each way (default 2, at most 10); the object is marked '*'",
+                        "A canvas without groups is described by its separate networks (largest first): inputs, named objects and ends. group='network 1' ('network' when there is one) lists every object of a network like a group's view, up to 250 lines per call",
+                        "group='ungrouped' lists the objects outside any group like a group's view. A real group with that name (or 'network N') wins",
                         "Lichen Thalli show as THALLUS with the author's description and properties; Hyperceps reads them but never changes them"
                     }
                 },
@@ -341,7 +342,7 @@ namespace Cordyceps.Tools.Unified
             [Description("Search query")] string query = null,
             [Description("Category filter")] string category = null,
             [Description("Type filter for list")] string typeFilter = null,
-            [Description("Group filter for list; for outline, a group name or a JSON list of names")] string group = null,
+            [Description("Group filter for list; for outline, a group name or a JSON list of names ('network 1' and 'ungrouped' also work)")] string group = null,
             [Description("Result limit for search")] int limit = 50,
             [Description("Exact match for find")] bool exact = false,
             [Description("Value to set")] string value = null,

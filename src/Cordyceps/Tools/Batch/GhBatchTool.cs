@@ -32,7 +32,7 @@ namespace Cordyceps.Tools.Batch
             + "Entries name each other by ref; refs keep working in later batches. Name existing objects by nickname or GUID prefix. A port is 'obj.port' (index, name or nickname). "
             + "Graft/flatten/simplify/reverse are port settings (inputModifiers/outputModifiers), not components; a list of values is one panel with one value per line, not a Text Split. "
             + "Leave out x/y for automatic left-to-right layout. Never rename native components; give capitalised nicknames to block-edge parameters and input panels/sliders. "
-            + "After structural changes check outputs with gh_inspect(action='tree'). A batch with errors changes nothing, so send the real batch; use options.dryRun only to try a few guessed names first.")]
+            + "options.watch reads outputs back after the solve (count, branches, short preview), so a block is built and checked in one call; check tree structure with gh_inspect(action='tree'). A batch with errors changes nothing, so send the real batch; use options.dryRun only to try a few guessed names first.")]
         public string GhBatch(
             [Description("Objects to create")] string components = null,
             [Description("Values and settings to change")] string set = null,
@@ -41,7 +41,7 @@ namespace Cordyceps.Tools.Batch
             [Description("Connections to remove, [output, input]")] string disconnect = null,
             [Description("Objects to delete")] string delete = null,
             [Description("Groups to create or extend")] string groups = null,
-            [Description("atomic, dryRun, solve, returnRuntimeMessages, maxOperations, timeoutSeconds")] string options = null)
+            [Description("atomic, dryRun, solve, returnRuntimeMessages, maxOperations, timeoutSeconds, watch")] string options = null)
         {
             var errors = new List<string>();
             var spec = BatchSpecParser.Parse(new BatchRawInput
@@ -59,39 +59,50 @@ namespace Cordyceps.Tools.Batch
             if (errors.Count > 0)
                 return Failure(errors);
             if (spec.IsEmpty)
-                return Failure("the batch is empty: give at least one of components, set, insert, wires, disconnect, delete or groups");
+                return Failure("the batch is empty: give at least one of components, set, insert, wires, disconnect, delete or groups"
+                    + (spec.Options.Watch.Count > 0 ? ". To only read outputs, use gh_inspect(action='tree')" : ""));
             if (spec.OperationCount > spec.Options.MaxOperations)
                 return Failure($"the batch has {spec.OperationCount} entries; the limit is {spec.Options.MaxOperations} "
                     + $"(options.maxOperations, at most {BatchOptions.MaxOperationsCeiling}). Split it into blocks");
 
             // Never edit during a solve: wait (off the UI thread) for a running one to finish, up to
-            // the batch's timeout. A modal dialog only a person can close is reported, not waited on.
-            var deadline = TimeSpan.FromSeconds(spec.Options.TimeoutSeconds);
+            // the batch's timeout and at most HostBusyGate.MaxWait, so the answer arrives before the
+            // AI app gives up on the call. A modal dialog only a person can close is reported, not waited on.
+            var deadline = TimeSpan.FromSeconds(Math.Min(spec.Options.TimeoutSeconds, HostBusyGate.MaxWait.TotalSeconds));
             var waited = Stopwatch.StartNew();
+            var dialog = new DialogCheck(); // the end of a long solve reads as a dialog for a moment
             while (true)
             {
                 var live = SolverState.Shared.Derive();
-                if (live.ModalInferred)
+                if (dialog.Confirmed(live.ModalInferred, DateTime.UtcNow))
                     return StatusEnvelope.BusyResult(live);
 
-                if (!live.Solving)
+                if (!live.Solving && !live.ModalInferred)
                 {
-                    var result = _context.ExecuteOnUiThread(() =>
+                    string result;
+                    try
                     {
-                        if (!ToolHelpers.TryGetActiveDocument(_context, out var doc, out var error))
-                            return Failure(error);
-                        // The UI thread can be reached mid-solve (Grasshopper pumps messages while
-                        // solving); come back once the solution has finished.
-                        if (doc.SolutionState == GH_ProcessStep.Process)
-                            return null;
-                        return BatchRunner.Run(doc, spec);
-                    });
+                        result = _context.ExecuteOnUiThread(() =>
+                        {
+                            if (!ToolHelpers.TryGetActiveDocument(_context, out var doc, out var error))
+                                return Failure(error);
+                            // The UI thread can be reached mid-solve (Grasshopper pumps messages while
+                            // solving); come back once the solution has finished.
+                            if (doc.SolutionState == GH_ProcessStep.Process)
+                                return null;
+                            return BatchRunner.Run(doc, spec);
+                        });
+                    }
+                    catch (HostBusyException ex)
+                    {
+                        return Failure(ex.Message + " Nothing was changed");
+                    }
                     if (result != null)
                         return result;
                 }
 
                 if (waited.Elapsed > deadline)
-                    return Failure($"Grasshopper was still solving after {deadline.TotalSeconds:0.#} s, so nothing was changed. Try again when the solve finishes");
+                    return Failure(HostBusyGate.Message(live, DateTime.UtcNow) + " Nothing was changed");
                 Thread.Sleep(WaitStepMs);
             }
         }

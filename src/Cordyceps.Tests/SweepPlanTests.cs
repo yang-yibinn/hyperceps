@@ -13,7 +13,7 @@ namespace Cordyceps.Tests
     public class SweepPlanTests
     {
         private static SweepControl Slider(decimal min, decimal max, int decimals = 0) =>
-            new SweepControl { Kind = SweepControlKind.Slider, Name = "BAY COUNT", Minimum = min, Maximum = max, Decimals = decimals, Current = "8" };
+            new SweepControl { Kind = SweepControlKind.Slider, Name = "DIVISION COUNT", Minimum = min, Maximum = max, Decimals = decimals, Current = "8" };
 
         private static SweepControl List(params string[] items) =>
             new SweepControl { Kind = SweepControlKind.ValueList, Name = "MODE", Items = items.ToList(), Current = items.FirstOrDefault() };
@@ -44,9 +44,9 @@ namespace Cordyceps.Tests
             var (steps, errors, _) = Plan(Slider(5, 9), "[4, 7, \"abc\", 10]");
             Assert.Single(steps);
             Assert.Equal(3, errors.Count);
-            Assert.Contains("values[0]: 4 is outside BAY COUNT's range 5..9", errors);
-            Assert.Contains("values[2]: 'abc' isn't a number; BAY COUNT is a number slider", errors);
-            Assert.Contains("values[3]: 10 is outside BAY COUNT's range 5..9", errors);
+            Assert.Contains("values[0]: 4 is outside DIVISION COUNT's range 5..9", errors);
+            Assert.Contains("values[2]: 'abc' isn't a number; DIVISION COUNT is a number slider", errors);
+            Assert.Contains("values[3]: 10 is outside DIVISION COUNT's range 5..9", errors);
         }
 
         [Fact]
@@ -55,7 +55,7 @@ namespace Cordyceps.Tests
             var (steps, errors, notes) = Plan(Slider(0, 10, 1), "[2.25, \"3.5\"]");
             Assert.Empty(errors);
             Assert.Equal(new[] { "2.3", "3.5" }, steps.Select(s => s.Label));
-            Assert.Equal("values[0]: 2.25 becomes 2.3 (BAY COUNT has 1 decimal)", notes.Single());
+            Assert.Equal("values[0]: 2.25 becomes 2.3 (DIVISION COUNT has 1 decimal)", notes.Single());
         }
 
         [Fact]
@@ -137,14 +137,70 @@ namespace Cordyceps.Tests
         public void Line_CountsPreviewProblemsAndTime()
         {
             var r = new SweepStepResult { Label = "5", SolveMs = 1475, Errors = 1, Warnings = 2 };
-            r.Watch.Add(new SweepWatchResult { Name = "TOP BRACING", Items = 166 });
+            r.Watch.Add(new SweepWatchResult { Name = "DIAGONALS", Items = 166 });
             r.Watch.Add(new SweepWatchResult { Name = "chk.out", Items = 1, Preview = "\"BM=5 lines 166\"" });
             r.Watch.Add(new SweepWatchResult { Name = "PTS", Items = 12, Branches = 3 });
             r.NewProblems.Add("'LOFT' (Loft) error: no curves");
 
             Assert.Equal(
-                "5 → TOP BRACING 166 · chk.out 1 [\"BM=5 lines 166\"] · PTS 12 in 3 branches · 1 error, 2 warnings (new: 'LOFT' (Loft) error: no curves) · 1.5 s",
+                "5 → DIAGONALS 166 · chk.out 1 [\"BM=5 lines 166\"] · PTS 12 in 3 branches · 1 error, 2 warnings (new: 'LOFT' (Loft) error: no curves) · 1.5 s",
                 SweepPlan.Line(r));
+        }
+
+        [Fact]
+        public void WatchText_CountBranchesPreviewAndNotSolved()
+        {
+            Assert.Equal("DIAGONALS 166", SweepPlan.WatchText(new SweepWatchResult { Name = "DIAGONALS", Items = 166, Branches = 1 }));
+            Assert.Equal("PTS 12 in 3 branches", SweepPlan.WatchText(new SweepWatchResult { Name = "PTS", Items = 12, Branches = 3 }));
+            Assert.Equal("chk.report 1 [\"ok\"]", SweepPlan.WatchText(new SweepWatchResult { Name = "chk.report", Items = 1, Preview = "\"ok\"" }));
+            Assert.Equal("NEW 0 (not solved)", SweepPlan.WatchText(new SweepWatchResult { Name = "NEW", Solved = false }));
+        }
+
+        [Fact]
+        public void SlowSolve_PutsTheControlBackAfterTheAnswer()
+        {
+            // A 34 s solve: one value plus a 34 s restore outlasted the AI app's ~60 s limit.
+            Assert.False(SweepPlan.RestoreAfterAnswer(1200));
+            Assert.False(SweepPlan.RestoreAfterAnswer(SweepPlan.RestoreAfterAnswerMs));
+            Assert.True(SweepPlan.RestoreAfterAnswer(34000));
+
+            Assert.Equal(1.2, SweepPlan.RestoreAllowanceSeconds(1200), 3);
+            Assert.Equal(0, SweepPlan.RestoreAllowanceSeconds(34000));
+
+            Assert.Equal("MIN AREA = 0.05", SweepPlan.RestoredText("MIN AREA", "0.05", 1200));
+            Assert.Equal("MIN AREA = 0.05 (Grasshopper re-solves it after this answer, about 34 s)",
+                SweepPlan.RestoredText("MIN AREA", "0.05", 33800));
+        }
+
+        [Fact]
+        public void RestoreRule_LooksAtTheSlowestValue_TheOriginal_TheTimeSpent_AndFailures()
+        {
+            // Review finding 3: the last value alone missed a slow original value and long sweeps.
+            Assert.False(SweepPlan.RestoreAfterAnswer(1000, 0, 2, false));        // fast everything: restore in the call
+            Assert.True(SweepPlan.RestoreAfterAnswer(1000, 34000, 2, false));     // fast values, slow original value
+            Assert.True(SweepPlan.RestoreAfterAnswer(6000, 0, 2, false));         // a slow value, even if not the last
+            Assert.True(SweepPlan.RestoreAfterAnswer(3000, 1000, 16, false));     // ten 3 s values: 15 s already spent
+            Assert.True(SweepPlan.RestoreAfterAnswer(0, 0, 0, true));             // a failed step: the error is the answer
+
+            Assert.Equal(4.0, SweepPlan.RestoreAllowanceSeconds(1000, 4000, 2), 3);
+            Assert.Equal(0, SweepPlan.RestoreAllowanceSeconds(1000, 34000, 2));
+
+            Assert.Equal("MIN AREA = 0.05", SweepPlan.RestoredText("MIN AREA", "0.05", false, 34000));
+            Assert.Equal("MIN AREA = 0.05 (Grasshopper re-solves it after this answer, about 34 s)",
+                SweepPlan.RestoredText("MIN AREA", "0.05", true, 34000));
+            Assert.Equal("MIN AREA = 0.05 (Grasshopper re-solves it after this answer)",
+                SweepPlan.RestoredText("MIN AREA", "0.05", true, 0));
+        }
+
+        [Fact]
+        public void WatchText_SaysHowManyItemsAreEmpty()
+        {
+            // A benchmark run read "GEOMETRY 248 in 186 branches" as 248 pieces of design geometry; 124 were empty slots.
+            Assert.Equal("GEOMETRY 248 (124 empty) in 186 branches",
+                SweepPlan.WatchText(new SweepWatchResult { Name = "GEOMETRY", Items = 248, Empty = 124, Branches = 186 }));
+            Assert.Equal("item.0 1 (1 empty)", SweepPlan.WatchText(new SweepWatchResult { Name = "item.0", Items = 1, Empty = 1 }));
+            Assert.Equal("chk.report 3 (1 empty) [\"a\", \"b\"]",
+                SweepPlan.WatchText(new SweepWatchResult { Name = "chk.report", Items = 3, Empty = 1, Preview = "\"a\", \"b\"" }));
         }
 
         [Fact]
@@ -167,7 +223,7 @@ namespace Cordyceps.Tests
         [Fact]
         public void Describe_NamesTheControlItsRangeAndItsValueBefore()
         {
-            Assert.Equal("BAY COUNT (slider 5..9), was 8", Slider(5, 9).Describe());
+            Assert.Equal("DIVISION COUNT (slider 5..9), was 8", Slider(5, 9).Describe());
             Assert.Equal("MODE (value list: Fast, Slow), was Fast", List("Fast", "Slow").Describe());
             Assert.Equal("SHOW (toggle), was false", Toggle().Describe());
         }

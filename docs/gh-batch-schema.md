@@ -41,8 +41,11 @@ Everything is checked before anything changes (see [Validation](#6-validation-an
 | `"3cadddef-1e2b-4c09-9390-0e8f78f7609f"` | Component GUID |
 
 One rule, never loose: exact name (ignoring case) among non-deprecated components; exactly one
-match is used; a deprecated component counts only when it is the only match. Anything else is an
-error listing every candidate (name, category, plugin, GUID).
+match is used; a deprecated component counts only when it is the only match. When the name belongs
+to exactly one built-in Grasshopper component and otherwise only to plugin components, the built-in
+one is used and a warning names the plugin's (`components[0].type: 'Offset Curve' is Grasshopper's
+Curve/Util/Offset Curve; Pufferfish has one too ('Pufferfish/Offset Curve'). Write that name for
+the plugin's`). Anything else is an error listing every candidate (name, category, plugin, GUID).
 
 Checked on this machine:
 
@@ -51,6 +54,7 @@ Checked on this machine:
 | `Merge` | Sets/Tree/Merge (the other "Merge" is deprecated) |
 | `Addition` | Maths/Operators/Addition (five deprecated ones ignored) |
 | `Line`, `Circle` | **Error**: both a component (Curve/Primitive) and a parameter (Params/Geometry) exist. Write `Curve/Line`, or use `"param": "Line"` |
+| `Offset Curve` (with Pufferfish installed) | Curve/Util/Offset Curve, with a warning naming Pufferfish's |
 
 ### Objects (`obj`)
 
@@ -59,13 +63,13 @@ Anywhere an object is named — wire ends, `set.target`, `delete`, group members
 | Form | Example | Rule |
 | --- | --- | --- |
 | ref | `split` | From this batch or an earlier batch on the same document |
-| nickname | `BOTTOM CRVS` | Must be unique on the canvas. Groups are not searched |
+| nickname | `LOWER CRVS` | Must be unique on the canvas. Groups are not searched |
 | GUID | `9ac1d04b-…` | Full GUID |
 | GUID prefix | `9ac1d04b` | 8 or more characters, must be unique |
 
 - Refs and nicknames are **case-sensitive**, so lowercase refs never collide with capitalised
-  nicknames. A near miss is offered as a suggestion, never used: `no object 'Bottom Crvs'. Did you
-  mean 'BOTTOM CRVS'?`
+  nicknames. A near miss is offered as a suggestion, never used: `no object 'Lower Crvs'. Did you
+  mean 'LOWER CRVS'?`
 - If a name resolves to two **different** objects (say a ref and a nickname), it is an error.
 - Refs may use letters, digits, `_` and `-` only (no dots or spaces), so `split.0` is never
   ambiguous.
@@ -160,7 +164,7 @@ Examples:
 ### `insert` — put a new component into an existing wire
 
 ```json
-{"ref": "cull", "on": ["POSTS.0", "POST OUT.0"], "in": "L", "out": "L"}
+{"ref": "cull", "on": ["POINTS.0", "POINT OUT.0"], "in": "L", "out": "L"}
 ```
 
 | Field | Meaning |
@@ -222,14 +226,16 @@ lists a deleted member as missing.
 | `returnRuntimeMessages` | `true` | Errors and warnings from new objects, and from existing downstream objects whose state changed |
 | `maxOperations` | `1000` | Safety limit: total entries across all lists. Hard ceiling 5,000 |
 | `timeoutSeconds` | `60` | Safety limit on checking and applying (solve time excluded). Exceeding it rolls back. Hard ceiling 110 |
+| `watch` | `[]` | Outputs to read back after the solve, so a block is built and checked in one call: up to 10, each an object (all its outputs), `obj.port`, or a ref from this batch, named as in `gh_inspect(action='tree')`. A name that doesn't resolve is an error like any other. The result's `watch` gives one line per output (see Results) |
 
 ## 4. Undo, rollback and the solver
 
 - One batch is one Grasshopper undo step: a single Ctrl+Z on the canvas reverts all of it.
 - If anything fails while applying, gh\_batch reverses its own recorded changes (not
   snapshot/revert), so the file keeps its name and undo history.
-- If a solve is running when the batch arrives, it waits for the solve to finish (up to the
-  timeout) before changing anything.
+- If a solve is running when the batch arrives, it waits for the solve to finish, up to 15 s (or
+  `timeoutSeconds` if shorter), before changing anything. If Grasshopper is still busy, nothing is
+  changed and the error says what is solving and for how long, before the AI app gives up on the call.
 - The solver is paused while applying. The batch solves only if `solve` is true **and** both the
   document's solver and Grasshopper's global solver lock are on. Their state is never changed.
 
@@ -248,11 +254,24 @@ characters). Wires are never echoed. The usual Cordyceps `status` block is added
   "counts": {"components": 4, "set": 0, "inserts": 0, "wires": 5, "disconnected": 0, "deleted": 0, "groups": 1},
   "solved": true,
   "errors": [], "warnings": [],
-  "runtime": [{"ref": "item", "level": "Warning", "message": "..."}, {"obj": "POST OUT", "level": "Error", "message": "..."}],
+  "runtime": [{"ref": "item", "level": "Warning", "message": "..."}, {"obj": "POINT OUT", "level": "Error", "message": "..."}],
   "hints": [],
   "ms": {"apply": 420, "solve": 1300}
 }
 ```
+
+With `options.watch`, the result also has one line per watched output, after `solved`:
+
+```json
+"watch": ["DIAGONALS 166", "PTS 12 in 3 branches", "checker.report 1 [\"lines 166, rule 166\"]"]
+```
+
+Each line is the name as written (a component named without a port gets one line per output,
+`name.OUTPUT`), the item count, `(N empty)` when N of those items are empty (null: an item past the
+end of a list, nothing at a path), the branch count when more than one, up to three short text, number
+or true/false values, and `(not solved)` when the owner didn't solve (`solve: false`, the solver off).
+The lines are the ones `gh_document(action='sweep')` gives per value. A dry run or a rejected batch
+has no `watch`.
 
 `created` maps each ref to the shortest unique GUID prefix (8 characters unless longer is needed).
 It lists up to 40 refs; `createdMore` counts the rest (refs stay valid in later batches, so the
@@ -281,7 +300,7 @@ fix where one exists.
 {
   "success": true, "ok": true, "dryRun": true, "changed": false,
   "resolved": {"tbl": "Params/Input/Panel", "split": "Sets/Text/Text Split", "item": "Sets/List/List Item", "out": "Params/Geometry/Curve"},
-  "existing": {"SEPARATOR": "1b2c3d4e", "BOTTOM CRVS": "8f9e0a1b"},
+  "existing": {"SEPARATOR": "1b2c3d4e", "LOWER CRVS": "8f9e0a1b"},
   "counts": {"components": 4, "set": 0, "inserts": 0, "wires": 5, "disconnected": 0, "deleted": 0, "groups": 1},
   "errors": [], "warnings": []
 }
@@ -409,7 +428,7 @@ note and the skill document (step 7).
     },
     "options": {
       "type": "object",
-      "description": "atomic (true), dryRun (false), solve (true), returnRuntimeMessages (true), maxOperations (1000), timeoutSeconds (60)."
+      "description": "atomic (true), dryRun (false), solve (true), returnRuntimeMessages (true), maxOperations (1000), timeoutSeconds (60), watch ([]: up to 10 outputs, \"obj\" or \"obj.port\", refs from this batch included, read back after the solve as count (and how many are empty), branches and a short preview)."
     }
   }
 }

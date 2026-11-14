@@ -49,9 +49,9 @@ namespace Cordyceps.Tools.Unified
                 {
                     Name = "save",
                     Description = "Save document to file",
-                    Required = new[] { "path" },
-                    Example = "action='save', path='/path/to/file.gh'",
-                    Tips = new[] { "Use .gh for binary, .ghx for XML format" }
+                    Optional = new[] { "path" },
+                    Example = "action='save', path='/path/to/file.gh' OR action='save' (to the file it was opened from or last saved to)",
+                    Tips = new[] { "Use .gh for binary, .ghx for XML format", "Without path, saves to the definition's own file; a definition never saved needs a path" }
                 },
                 ["clear"] = new ActionInfo
                 {
@@ -85,14 +85,15 @@ namespace Cordyceps.Tools.Unified
                 ["sweep"] = new ActionInfo
                 {
                     Name = "sweep",
-                    Description = "Move one number slider, value list or toggle through a list of values, solving at each, and report the watched outputs' item counts (with a short preview of text and number outputs), the canvas's errors and warnings and the solve time; then put the control back. One call instead of a set + read per value",
+                    Description = "Move one number slider, value list or toggle through a list of values, solving at each, and report the watched outputs' item counts (with how many are empty, and a short preview of text and number outputs), the canvas's errors and warnings and the solve time; then put the control back. One call instead of a set + read per value",
                     Required = new[] { "id" },
                     Optional = new[] { "values", "watch" },
-                    Example = "action='sweep', id='BAY COUNT', values='[5,7,8,9]', watch='[\"TOP BRACING\", \"checker.out\"]'",
+                    Example = "action='sweep', id='DIVISION COUNT', values='[5,7,8,9]', watch='[\"DIAGONALS\", \"checker.out\"]'",
                     Tips = new[] {
                         "id and watch take gh_batch's names (ref, unique nickname, GUID prefix); a watch entry may be 'obj.port', and a component without a port watches all its outputs",
                         "values is a JSON list: slider numbers (in range; rounded to the slider's decimals, with a note), value-list item names (or 0-based indices), or true/false for a toggle. Leave it out to try every value of a toggle, a value list, or a whole-number slider with at most 20 steps",
                         "Everything is checked first; nothing changes if a value or name is wrong. At most 20 values and 10 watched outputs per call; it stops after about 45 s and reports what it has",
+                        "When a value or the control's own value solves in over 5 s, the sweep has run over 15 s, or a value failed, the control is set back and Grasshopper re-solves it after the answer ('restored' says so), so the call doesn't wait for that solve. A sweep sent during a solve waits for it (up to 15 s), as gh_batch does, then runs",
                         "The control is always put back and solved again, even if a solve fails. No undo step is recorded; Grasshopper may still mark the file as changed",
                         "Refused while the solver is off: it stays off unless the user agrees to turn it on"
                     }
@@ -304,8 +305,11 @@ namespace Cordyceps.Tools.Unified
                 if (!ToolHelpers.TryGetActiveDocument(_context, out var doc, out var error))
                     return ToolHelpers.ErrorResponse(error);
 
+                // Hyperceps: without a path, save to the definition's own file.
                 if (string.IsNullOrEmpty(path))
-                    return ToolHelpers.ErrorResponse("File path is required");
+                    path = doc.FilePath;
+                if (string.IsNullOrEmpty(path))
+                    return ToolHelpers.ErrorResponse("This definition has never been saved, so give a full path ending in .gh; ask the user where it should go");
 
                 if (!GhArchiveSave.TryGetFormat(path, out var format))
                     return ToolHelpers.ErrorResponse("File must have .gh or .ghx extension");
@@ -423,6 +427,9 @@ namespace Cordyceps.Tools.Unified
             // unbounded silence this refusal exists to replace. The result names the running
             // document and when it started so the caller can decide how long to wait.
             var liveness = SolverState.Shared.Derive();
+            // Hyperceps: the end of a long solve reads as a dialog for a moment; believe it only if it persists.
+            if (liveness.ModalInferred && !DialogCheck.IsRealDialog(() => SolverState.Shared.Derive(), System.Threading.Thread.Sleep, () => DateTime.UtcNow))
+                liveness = SolverState.Shared.Derive();
             if (liveness.Solving || liveness.ModalInferred)
                 return StatusEnvelope.BusyResult(liveness);
 

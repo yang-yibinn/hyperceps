@@ -24,26 +24,26 @@ namespace Cordyceps.Tests
             var spec = Parse(new BatchRawInput
             {
                 Components = @"[
-                    {""ref"": ""tbl"",   ""panel"": ""0,0,2,2,4,4,6,6,8,8"", ""nickname"": ""BOTTOM CHORD INDEX""},
+                    {""ref"": ""tbl"",   ""panel"": ""0,0,2,2,4,4,6,6,8,8"", ""nickname"": ""LOWER CURVE INDEX""},
                     {""ref"": ""split"", ""type"": ""Text Split""},
                     {""ref"": ""item"",  ""type"": ""List Item"", ""addOutputs"": 1, ""inputModifiers"": {""i"": ""graft""}},
                     {""ref"": ""out"",   ""param"": ""Curve"", ""nickname"": ""PAIRS""}
                 ]",
                 Wires = @"[[""tbl.0"", ""split.0""], [""SEPARATOR.0"", ""split.1""],
-                           [""BOTTOM CRVS.0"", ""item.L""], [""split.0"", ""item.i""], [""item.0"", ""out.0""]]",
+                           [""LOWER CRVS.0"", ""item.L""], [""split.0"", ""item.i""], [""item.0"", ""out.0""]]",
                 Groups = @"[{""name"": ""PAIRS"", ""color"": ""#DCEDC8"", ""members"": [""tbl"", ""split"", ""item"", ""out""]}]"
             }, out var errors);
 
             Assert.Empty(errors);
             Assert.Equal(4, spec.Components.Count);
             Assert.Equal(CreateKind.Panel, spec.Components[0].Kind);
-            Assert.Equal("BOTTOM CHORD INDEX", spec.Components[0].Nickname);
+            Assert.Equal("LOWER CURVE INDEX", spec.Components[0].Nickname);
             Assert.Equal(1, spec.Components[2].AddOutputs);
             Assert.True(spec.Components[2].InputModifiers.Single().Settings.Graft);
             Assert.Equal(CreateKind.Param, spec.Components[3].Kind);
             Assert.Equal("Curve", spec.Components[3].TypeText);
             Assert.Equal(5, spec.Wires.Count);
-            Assert.Equal("BOTTOM CRVS", spec.Wires[2].From.Obj);
+            Assert.Equal("LOWER CRVS", spec.Wires[2].From.Obj);
             Assert.Equal("0", spec.Wires[2].From.Port);
             Assert.Equal(4, spec.Groups[0].Members.Count);
             Assert.Equal(10, spec.OperationCount);
@@ -55,15 +55,15 @@ namespace Cordyceps.Tests
             var spec = Parse(new BatchRawInput
             {
                 Components = @"[{""ref"": ""cull"", ""type"": ""Cull Pattern""}, {""ref"": ""pat"", ""panel"": ""true\nfalse"", ""nickname"": ""SKIP EVERY OTHER""}]",
-                Insert = @"[{""ref"": ""cull"", ""on"": [""POSTS.0"", ""POST OUT.0""], ""in"": ""L"", ""out"": ""L""}]",
+                Insert = @"[{""ref"": ""cull"", ""on"": [""POINTS.0"", ""POINT OUT.0""], ""in"": ""L"", ""out"": ""L""}]",
                 Wires = @"[[""pat.0"", ""cull.P""]]"
             }, out var errors);
 
             Assert.Empty(errors);
             Assert.Equal("true\nfalse", spec.Components[1].PanelText);
             var ins = spec.Insert.Single();
-            Assert.Equal("POSTS", ins.OnFrom.Obj);
-            Assert.Equal("POST OUT", ins.OnTo.Obj);
+            Assert.Equal("POINTS", ins.OnFrom.Obj);
+            Assert.Equal("POINT OUT", ins.OnTo.Obj);
             Assert.Equal("L", ins.In);
             Assert.Equal("L", ins.Out);
         }
@@ -225,6 +225,39 @@ namespace Cordyceps.Tests
         }
 
         [Fact]
+        public void Parse_OptionsWatch_ListOrSingleName_DuplicatesDropped()
+        {
+            var spec = Parse(new BatchRawInput(), out var errors);
+            Assert.Empty(spec.Options.Watch);
+
+            spec = Parse(new BatchRawInput { Options = @"{""watch"": [""DIAGONALS"", ""checker.report"", ""DIAGONALS""]}" }, out errors);
+            Assert.Empty(errors);
+            Assert.Equal(new[] { "DIAGONALS", "checker.report" }, spec.Options.Watch);
+
+            spec = Parse(new BatchRawInput { Options = @"{""watch"": ""DIAGONALS""}" }, out errors);
+            Assert.Empty(errors);
+            Assert.Equal(new[] { "DIAGONALS" }, spec.Options.Watch);
+        }
+
+        [Fact]
+        public void Parse_OptionsWatch_RejectsBadEntriesAndTooMany()
+        {
+            Parse(new BatchRawInput { Options = @"{""watch"": {""a"": 1}}" }, out var errors);
+            Assert.Contains(errors, e => e.StartsWith("options.watch: must be a list"));
+
+            Parse(new BatchRawInput { Options = @"{""watch"": [""A"", 3, """"]}" }, out errors);
+            Assert.Contains(errors, e => e.StartsWith("options.watch[1]"));
+            Assert.Contains(errors, e => e.StartsWith("options.watch[2]"));
+
+            var many = "[" + string.Join(", ", Enumerable.Range(0, 11).Select(i => $"\"O{i}\"")) + "]";
+            Parse(new BatchRawInput { Options = "{\"watch\": " + many + "}" }, out errors);
+            Assert.Contains(errors, e => e == "options.watch: at most 10 outputs");
+
+            Parse(new BatchRawInput { Options = @"{""wach"": [""A""]}" }, out errors);
+            Assert.Contains(errors, e => e.Contains("Did you mean 'watch'"));
+        }
+
+        [Fact]
         public void Parse_SliderRange_MustGoUp()
         {
             Parse(new BatchRawInput { Components = @"[{""ref"": ""s"", ""slider"": {""min"": 9, ""max"": 5}}]" }, out var errors);
@@ -282,7 +315,7 @@ namespace Cordyceps.Tests
         [Theory]
         [InlineData("split.0", "split", "0")]
         [InlineData("cull.L", "cull", "L")]
-        [InlineData("BOTTOM CRVS.0", "BOTTOM CRVS", "0")]
+        [InlineData("LOWER CRVS.0", "LOWER CRVS", "0")]
         [InlineData("v1.2.L", "v1.2", "L")]
         [InlineData("SEPARATOR", "SEPARATOR", null)]
         public void Parse_SplitsOnTheLastDot(string text, string obj, string port)

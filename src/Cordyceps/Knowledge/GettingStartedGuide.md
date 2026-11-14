@@ -3,7 +3,8 @@
 Visual dataflow graph for parametric 3D. Components on canvas connect via wires. Data flows left-to-right.
 
 Hyperceps comes with a Claude skill, `hyperceps`, released with the same version number. It holds the
-full working method and conventions; load it if your app has it.
+full working method and conventions; load it if your app has it. If not, `gh_inspect(action='skill')`
+(or the resource `gh://skill`) returns the same text from the plugin. Read it once, before working on the canvas.
 
 ## Tools (8 total)
 
@@ -15,7 +16,7 @@ Use `action='help'` on the unified tools for parameters.
 - `gh_wire` — connect, disconnect, list, clear, validate
 - `gh_document` — save, clear, solver, **sweep** (try a slider at several values in one call), snapshots, capture
 - `gh_script` — get/set script code, configure params
-- `gh_inspect` — status, outputs, trace, disconnected, tree (branch paths and counts)
+- `gh_inspect` — status, outputs, trace, disconnected, tree (branch paths and counts), skill (the working guide)
 
 **Rhino:**
 - `rhino_scene` — objects, layers, selection, visibility
@@ -27,7 +28,7 @@ Every tool call is a round trip, so build a whole block in one `gh_batch` call, 
 
 ```
 gh_canvas(action='outline')                    # read what is there: groups, what flows between them, sliders, errors
-gh_canvas(action='outline', group='POSTS')     # how one group is wired inside (names to wire to)
+gh_canvas(action='outline', group='POINTS')     # how one group is wired inside (names to wire to)
 gh_batch(components=[...], set=[...], wires=[...], groups=[...])   # one block, one undo step, one solve
 gh_inspect(action='tree', id='["ref.0", "OUTPUT NAME"]')           # check the outputs whose structure changed
 gh_batch(...)                                  # fix with a small follow-up batch
@@ -46,8 +47,10 @@ works as an id in every tool.
 
 - `group='NAME'` (or a JSON list of names): one line per object, upstream first, each with what feeds
   it, its port settings and what it holds. A child group is one line; open it with its own name.
-- `id='NAME', depth=2`: what feeds one object and what it feeds, a few wires each way. Use it on
-  canvases without groups, where the overview lists each separate network's inputs and ends instead.
+- On a canvas without groups the overview lists each separate network's inputs and ends instead;
+  `group='network 1'` (`'network'` when there is one) lists every object of a network in the same
+  format, in one call. `group='ungrouped'` does the same for the objects outside groups.
+- `id='NAME', depth=2`: what feeds one object and what it feeds, a few wires each way.
 - Groups shown as `THALLUS` are Lichen Thalli: the author's description and properties explain the
   block. Hyperceps reads Thalli but never changes them.
 
@@ -58,14 +61,18 @@ works as an id in every tool.
 
 ## Checking across slider values
 
-`gh_document(action='sweep', id='BAY COUNT', values='[5,7,9]', watch='["TOP BRACING", "checker.out"]')`
-sets each value, solves, and returns one line per value: each watched output's item count (with a
-short preview of text and number outputs), the canvas's errors and warnings (naming new ones) and the
+`gh_document(action='sweep', id='DIVISION COUNT', values='[5,7,9]', watch='["DIAGONALS", "checker.out"]')`
+sets each value, solves, and returns one line per value: each watched output's item count (with how
+many are empty, and a short preview of text and number outputs), the canvas's errors and warnings (naming new ones) and the
 solve time. It then puts the control back. Value lists take item names and toggles true/false; leave
 `values` out to try every value of a toggle, a value list or a small whole-number slider. Everything is
 checked first, and it is refused while the solver is off.
 
 ## Scripts
+
+**Seeing what it does**: add `solve=true` to `gh_script(action='set')` or `action='configure'` to solve once and get the script's `results` (outputs' counts and first values) and `messages` (errors, warnings, remarks) in the same answer.
+
+**Changing part of a script**: `gh_script(action='edit', id='...', edits='[{"old": "exact text", "new": "replacement"}]', solve=true)` replaces only those passages and writes the result as `set` does. Each `old` must occur exactly once; if any edit fails, nothing changes and the error names the closest line. Send only what changes: rewriting a long script to fix a few lines costs minutes per round.
 
 **Updating script code**: `gh_script(action='set')` preserves connections for params whose names survive unchanged. If params are renamed or removed, the response includes `lostConnections` — an array directly usable with `gh_wire(action='connect')` to restore wiring.
 
@@ -119,7 +126,7 @@ omit stays as it is, and passing none of the three reads instead of writing. `pa
 
 **Ambiguous names**: "Circle" and "Line" match both a component and a parameter. Use `Category/Name` (`Curve/Line`), a GUID, or in gh_batch `"param": "Line"`.
 
-**Naming**: never rename native components. Give a capitalised nickname to the parameters at a block's edges and to input panels and sliders (`TRUSS DEPTH (m)`), and a descriptive name to script components.
+**Naming**: never rename native components. Give a capitalised nickname to the parameters at a block's edges and to input panels and sliders (`OFFSET (m)`), and a descriptive name to script components.
 
 ## Layout
 
@@ -144,6 +151,7 @@ When the cluster editor is open, `gh_document(action='recompute')` and `gh_docum
 
 ## Resources
 
+- `gh://skill` — the working guide (the `hyperceps` skill), from the plugin
 - `gh://docs/data-trees` — essential for list/tree ops
 - `gh://docs/common-errors` — error→fix reference
 - `gh://docs/rendering` — bake→materials→viewport→capture

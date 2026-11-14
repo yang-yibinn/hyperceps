@@ -9,9 +9,9 @@
 | "N is outside X's range" / "has no item" / "isn't true or false" (sweep) | A value the control can't take | The error lists every bad value at once and nothing changed; use values in the slider's range, the value list's item names, or true/false |
 | "the solver is off, so sweep can't compute each value" | The user turned the solver off | Leave it off; ask the user before turning it on with `gh_document(action='solver', enabled=true)` |
 | "X is a Panel; sweep moves a number slider, a value list or a toggle" (sweep) | `id` named something that isn't a control | Name the slider, value list or toggle. To try several panel values, use `gh_batch` `set` once per value instead |
-| "no group named 'X'" / "'X' matches N groups" (outline) | The group name is misspelt, or only the start of several names was given | The error suggests the closest name or lists the matches; use the full name or the group's id |
+| "no group named 'X'" / "'X' matches N groups" (outline) | The group name is misspelt, or only the start of several names was given | The error suggests the closest name or lists the matches; use the full name or the group's id. 'network N' names exist only on a canvas without groups (numbered as the overview lists them, largest first; 'network' alone when there is one); elsewhere use `group='ungrouped'` |
 | "Unknown component type" | Name doesn't match | `gh_canvas(action='search', query='...')` or use GUID |
-| "Ambiguous component name" | Multiple matches | Use `Category/Name` format or GUID |
+| "Ambiguous component name" / "'X' is ambiguous" | Multiple matches | Use `Category/Name` format or GUID. In gh_batch, a name shared by one built-in component and only plugin ones (Offset Curve in Grasshopper and Pufferfish) uses the built-in one, with a warning naming the plugin's (`'Pufferfish/Offset Curve'`) |
 
 ## Connection Errors
 
@@ -45,15 +45,26 @@ focused, so check it if results look like they belong to another file. `solving_
 only when a *different* open definition is the one holding the solver: all open definitions share
 the single Rhino UI thread, so a heavy solve in a file you are not touching still blocks you.
 
+A call that finds Grasshopper solving, not responding, or busy with another call waits up to 15
+seconds; if it is still busy, the call stops before reaching Grasshopper and says what is solving
+and for how long ("Grasshopper has been solving 'X' for 3 min 20 s, so this call stopped before
+reaching it"). Nothing was done, so the call can simply be sent again later.
+
 If a call is slow, times out, or returns nothing at all, call `gh_inspect(action='connection')`.
 It answers from cached state and never touches the Grasshopper document, so it replies even when
-every other call is stuck.
+every other call is stuck. The AI app itself may give up on a call after about a minute ("The
+operation timed out") while Grasshopper keeps working, for example a `gh_batch` whose own solve is
+that slow.
+
+A script that never finishes (a loop over every pair of thousands of items) can't be stopped from
+here, and Escape doesn't stop it either: only closing Rhino ends it, and an unsaved definition is
+lost. Tell the user rather than retrying.
 
 | What you see | What it means | What to do |
 |---|---|---|
 | `ui: "responsive"` | The host is fine | Treat any error as a real tool error, not a host problem |
 | `ui: "blocked"`, `solving: true` | Grasshopper is mid-solve and holding the UI thread | **Wait.** Heavy solves take minutes. Re-probe with `connection`; do not retry in a tight loop |
-| `modal_inferred: true` | The UI thread is stuck with nothing solving — a modal dialog is open in Rhino | **Only a human can clear it.** Stop retrying and tell the user to check Rhino for a dialog |
+| `modal_inferred: true` | The UI thread is stuck with nothing solving — a modal dialog is open in Rhino. (For a moment at the end of a long solve the same reading appears and clears; `gh_batch`, sweep and recompute only report a dialog once it has held for 2 s) | **Only a human can clear it.** Stop retrying and tell the user to check Rhino for a dialog |
 | `ui: "unknown"` | No heartbeat recorded yet (the component was just placed) | Retry in a second |
 
 `gh_document(action='recompute')` refuses while a solution is running — or while a modal dialog holds the UI thread — rather than queueing or
@@ -86,6 +97,7 @@ the MCP protocol.
 |-------|-------|-----|
 | "Compilation failed" | Syntax error | `gh_inspect(action='reports')` for details |
 | "Type not found" | Missing import | C#: `using Rhino.Geometry;` / Python: `import Rhino.Geometry as rg` |
+| "edits[N]: the text to replace isn't in the script" / "occurs N times" (`gh_script edit`) | The `old` text differs from the script (spacing, indentation, an earlier edit in the same call) or isn't unique | Nothing changed. Correct the edit from the lines the error shows as they now read (no need to read the script again), or add a neighbouring line to make it unique (trailing spaces are already ignored; indentation must match); edits apply in order. Next to a C# `RunScript` parameter list, the error says `configure` already keeps it in step with the ports: edit only the body |
 | Connections lost after `gh_script set` | Param renamed or removed | Check `lostConnections` in response, re-wire with `gh_wire(action='connect')` |
 | "Can not determine input code language" | Directive-less body set on a bare unified **Script** component, which has no language until one is given | `gh_script(set)` preserves an existing directive automatically; for a bare Script component with no language yet it now returns a `languageWarning` in the response. Start your `code` with `#! python 3` (or `// #! csharp`) as line 1 and call `set` again — this also recovers a component already in this state. (The dedicated `C# Script` / `Python 3 Script` components carry a concrete language and don't need a directive.) |
 | "Cannot set source on 'X': the component's code input parameter is visible" | The component exposes its code as a wired input parameter, so its source is driven by that wire and cannot be assigned directly | Disconnect and remove the component's code input parameter, then retry `gh_script(action='set')` — or feed the code through that parameter with `gh_wire` instead. Nothing was written; the component is unchanged. |
@@ -109,5 +121,6 @@ Numeric parameters (e.g., `x`, `y`, `lens`, `wait`, `timeout`, `azimuth`) accept
 | "No active document" | GH/Rhino not ready | Ensure document open, `gh_document(action='info')` |
 | "No bakeable outputs" | Non-geometry component | Only geometry types can bake |
 | "Render timed out" | Slow render | Increase timeout or reduce complexity |
+| "This definition has never been saved, so give a full path ending in .gh" | `gh_document(action='save')` without a path on a definition with no file yet | Ask the user where it should go and pass `path`; later saves can leave it out |
 | "Document is busy: another operation held the ... document lock for more than N seconds" | A prior request is running a long operation, or the Rhino UI thread is wedged (e.g. an infinite-loop script component) | Wait and retry; if it persists, a script component is likely stuck — fix or remove it, and restart Rhino if needed. Operations are serialized on the single Rhino UI thread, so only one runs at a time. |
 | "MCP server is shutting down; the request was not processed" | The Cordyceps component was removed (or its port changed) while this request was in flight | Transient — the server stopped. Re-place the component (or restore its port) and reconnect, then retry. |
