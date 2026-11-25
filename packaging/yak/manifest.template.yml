@@ -3,15 +3,15 @@ version: {{VERSION}}
 authors:
   - Yibin Yang
 description: |
-  **Claude builds and edits your Grasshopper definitions in a few validated calls instead of hundreds.**
+  Claude builds and edits your Grasshopper definitions in a few validated calls instead of hundreds.
 
-  **The bigger the job, the bigger the saving.** Given the same requests as Cordyceps 1.5.0, which it is built on, Hyperceps used 2.6-2.8x fewer cost-weighted tokens and 2.1-2.6x fewer turns to build a block of a definition (two pairs, Hyperceps 1.0 and later), 2.2x fewer to explain a 164-object definition, and 2.8x fewer to make four changes to a 918-line C# script, in 3.7x less time. A single small change costs about the same with either (benchmark on GitHub).
+  The bigger the job, the bigger the saving. Given the same requests as Cordyceps 1.5.0, which it is built on, Hyperceps used 2.6-2.8x fewer cost-weighted tokens and 2.1-2.6x fewer turns to build a block of a definition (two pairs, Hyperceps 1.0 and later), 2.2x fewer to explain a 164-object definition, and 2.8x fewer to make four changes to a 918-line C# script, in 3.7x less time. A single small change costs about the same with either (benchmark on GitHub).
 
   Hyperceps is a Grasshopper plugin with a built-in guide for the AI agent. The plugin lets an agent read and change the canvas through the Model Context Protocol (MCP); the guide teaches it to do that efficiently: read the canvas once, build a whole block in one call, check data trees, test slider values, edit scripts without resending them, and keep your naming conventions. The plugin hands the guide (the hyperceps Claude skill) to the agent when it connects, so there is nothing else to install.
 
-  **Get started:** drop the component (Params > Util > Hyperceps) and connect your AI app to http://127.0.0.1:26930/mcp. Optionally, also install the guide as a Claude skill: copy the `skill/hyperceps` folder from this package's install folder into ~/.claude/skills (Claude Code), or upload hyperceps-skill.zip from https://github.com/yang-yibinn/hyperceps/releases as a custom skill in the Claude apps.
+  Get started: drop the component (Params > Util > Hyperceps) and connect your AI app to http://127.0.0.1:26930/mcp. Optionally, also install the guide as a Claude skill: copy the skill/hyperceps folder from this package's install folder into ~/.claude/skills (Claude Code), or upload hyperceps-skill.zip from https://github.com/yang-yibinn/hyperceps/releases as a custom skill in the Claude apps.
 
-  **What it adds to Cordyceps:** gh_batch (many edits in one validated, undoable call), gh_canvas outline (the canvas in one short call), gh_inspect tree (data trees at a glance), gh_document sweep (a slider at several values in one call), gh_script edit (change part of a script without resending it), answers instead of hangs while Grasshopper is busy, names that work in every tool, agent guidance, and Lichen Thalli in the outline. Cordyceps' own tools are unchanged, and the two plugins install side by side.
+  What it adds to Cordyceps: gh_batch (many edits in one validated, undoable call), gh_canvas outline (the canvas in one short call), gh_inspect tree (data trees at a glance), gh_document sweep (a slider at several values in one call), gh_script edit (change part of a script without resending it), answers instead of hangs while Grasshopper is busy, names that work in every tool, agent guidance, and Lichen Thalli in the outline. Cordyceps' own tools are unchanged, and the two plugins install side by side.
 
   Developed by Yibin Yang at Adrian Smith + Gordon Gill Architecture (AS+GG). Built on top of Cordyceps by Brooks Talley (MIT), which was inspired by grasshopper-mcp by Alfred Chen.
 url: "https://github.com/yang-yibinn/hyperceps"

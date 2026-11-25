@@ -41,7 +41,7 @@
     <!-- Specifies information for Assembly -->
     <!-- Hyperceps versions independently (based on Cordyceps 1.5.0, commit bfef0e1). The skill in
          skills/hyperceps carries the same number (Core/SkillPairing; a unit test checks it). -->
-    <Version>1.1.0</Version>
+    <Version>1.1.1</Version>
     <Title>Hyperceps</Title>
     <Company>Yibin Yang</Company>
     <Authors>Yibin Yang; based on Cordyceps by Brooks Talley</Authors>

@@ -51,7 +51,7 @@ namespace Cordyceps.Tools.Unified
                     Description = "Save document to file",
                     Optional = new[] { "path" },
                     Example = "action='save', path='/path/to/file.gh' OR action='save' (to the file it was opened from or last saved to)",
-                    Tips = new[] { "Use .gh for binary, .ghx for XML format", "Without path, saves to the definition's own file; a definition never saved needs a path" }
+                    Tips = new[] { "Only when the user asks: saving is the user's", "Use .gh for binary, .ghx for XML format", "Without path, saves to the definition's own file; a definition never saved needs a path" }
                 },
                 ["clear"] = new ActionInfo
                 {

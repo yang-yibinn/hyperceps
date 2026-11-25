@@ -4,6 +4,14 @@ All notable changes to Hyperceps (and, below its own entries, to the original Co
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## Hyperceps [1.1.1] - 2026-11-25
+
+### Changed
+
+- **A new icon** - The component and the Package Manager show Hyperceps' own icon: two interlaced loops on an orange badge. The component's 24 px icon is drawn for that size (one dark band per loop), and the package now carries a 64 px icon instead of the component's 24 px one. The source is in `packaging/icon` (two SVG files; `render.ps1` makes the 24, 64 and 512 px PNGs).
+- **The package description is plain text** - Food4Rhino shows a package's description as written, so its bold marks would appear as `**`. The description no longer uses them.
+- **Skill: saving is the user's** - The skill told the agent to save a definition that had no file before building and after each block, so a stuck script wouldn't lose it. Saving is now left to the user: the skill and `gh_document`'s save help say to save only when the user asks. The save action itself is unchanged.
+
 ## Hyperceps [1.1.0] - 2026-11-14
 
 ### Added

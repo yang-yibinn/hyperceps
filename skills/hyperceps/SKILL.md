@@ -5,7 +5,7 @@ description: The companion skill of the Hyperceps Grasshopper plugin - how to bu
 
 # Working with Grasshopper through Hyperceps
 
-This skill is for Hyperceps 1.1.0. The Grasshopper plugin and this skill are one product with one
+This skill is for Hyperceps 1.1.1. The Grasshopper plugin and this skill are one product with one
 version number; the plugin's connection note opens with its version. If the two differ, tell the
 user to update the older part.
 
@@ -414,10 +414,8 @@ right-click menu, "Add selected objects to Thallus").
 
 ## Things that surprise people
 
-- **Save early**: if the definition has no file yet (`gh_document(action='info')` shows no
-  `filePath`), ask the user where to save it before building, save once with
-  `gh_document(action='save', path='...')`, then after each block with `gh_document(action='save')`.
-  A stuck script means closing Rhino, and an unsaved definition is lost.
+- **Saving is the user's**: save the definition only when the user asks
+  (`gh_document(action='save')`).
 - **Busy Grasshopper**: while Grasshopper is solving or held by a script, a call waits up to 15 s,
   then answers that it is busy (what is solving, for how long) without doing anything. Check again
   with `gh_inspect(action='connection')`, which answers at once, rather than sending other calls. The

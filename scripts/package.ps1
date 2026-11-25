@@ -76,7 +76,7 @@ if (Test-Path $stage) { Remove-Item -LiteralPath $stage -Recurse -Force }
 New-Item -ItemType Directory -Path $stage | Out-Null
 Copy-Item -LiteralPath $gha -Destination $stage
 Copy-Item -LiteralPath (Join-Path $repo 'LICENSE') -Destination (Join-Path $stage 'LICENSE.txt')
-Copy-Item -LiteralPath (Join-Path $repo 'src\Cordyceps\Resources\HypercepsIcon.png') -Destination (Join-Path $stage 'icon.png')
+Copy-Item -LiteralPath (Join-Path $repo 'packaging\icon\hyperceps-64.png') -Destination (Join-Path $stage 'icon.png')
 foreach ($name in 'manifest.template.yml', 'README.md') {
     $text = (Get-Content -LiteralPath (Join-Path $repo "packaging\yak\$name") -Raw).Replace('{{VERSION}}', $version)
     $out = if ($name -eq 'manifest.template.yml') { 'manifest.yml' } else { $name }
